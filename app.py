@@ -1353,4 +1353,4 @@ if "final_report" in st.session_state:
 else:
     st.info("Sau khi chạy đối chiếu, kết quả sẽ xuất hiện tại đây.")
 '''
-print(path)
+
