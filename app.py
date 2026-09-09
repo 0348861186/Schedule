@@ -206,7 +206,7 @@ if st.button("🚀 开始考勤核对分析 / Chạy phân tích chấm công", 
                 for attempt in range(max_retries):
                     try:
                         response = client.models.generate_content(
-                            model='gemini-1.5-flash',
+                            model='gemini-2.5-flash',
                             contents=prompt,
                         )
                         break
