@@ -1,11 +1,9 @@
 from pathlib import Path
 
+path = "/mount/src/schedule/app.py"
 file_path = Path(path)
 # Tạo thư mục cha nếu chưa tồn tại (parents=True giúp tạo cả thư mục cha lồng nhau)
 file_path.parent.mkdir(parents=True, exist_ok=True)
-
-# Sau đó mới tiến hành ghi tệp
-file_path.write_text(code, encoding="utf-8")
 
 code = r'''import io
 import os
@@ -1315,19 +1313,4 @@ with col_dl2:
     )
 '''
 
-path = "/mnt/data/attendance_dashboard_gemini_smart_columns.py"
-Path(path).write_text(code, encoding="utf-8")
-
-# Tạo requirements tương ứng để dễ triển khai Streamlit Cloud
-requirements = """streamlit
-pandas
-openpyxl
-xlrd
-plotly
-google-genai
-"""
-req_path = "/mnt/data/requirements.txt"
-Path(req_path).write_text(requirements, encoding="utf-8")
-
-print(f"Đã tạo: {path}")
-print(f"Đã tạo: {req_path}")
+file_path.write_text(code, encoding="utf-8")
