@@ -1,14 +1,12 @@
 from pathlib import Path
+import zipfile, textwrap, os
 
 root = Path("/mnt/data/attendance_streamlit_project")
-for file_path in root.glob("**/*"):
-    if file_path.is_file():
-        content = file_path.read_text(encoding="utf-8")
-        # Thay thế các khoảng trắng đặc biệt (U+00A0) thành khoảng trắng thường
-        cleaned_content = content.replace("\xa0", "    ")
-        file_path.write_text(cleaned_content, encoding="utf-8")
-
-print("Đã làm sạch khoảng trắng ẩn trong toàn bộ dự án!")
+if root.exists():
+    import shutil
+    shutil.rmtree(root)
+(root / "modules").mkdir(parents=True)
+(root / ".streamlit").mkdir(parents=True)
 
 files = {}
 
@@ -404,7 +402,6 @@ def _nearest_pair(punches, start, end):
     return actual_in, actual_out
 
 def _make_punch_map(attendance_df):
-    # Converts both supported attendance layouts to {employee_id: [datetimes]}
     m = {}
     for _, r in attendance_df.iterrows():
         eid = str(r["employee_id"]).strip()
@@ -457,7 +454,6 @@ def build_daily_report(attendance_df, shift_df, office_df, worker_df, target_dat
     office = _employee_dict(office_df)
     workers = _employee_dict(worker_df)
 
-    # If lists are missing, fall back to IDs found in attendance/shift.
     office_ids = set(office)
     worker_ids = set(workers)
     if not office_ids and not worker_ids:
@@ -479,8 +475,6 @@ def build_daily_report(attendance_df, shift_df, office_df, worker_df, target_dat
             punches.get(eid, []), start, end
         )
 
-        # For robust real-world punch data, if nearest_pair fails, derive min/max
-        # punches inside the day.
         day_punches = [p for p in punches.get(eid, [])
                        if target - timedelta(hours=2) <= p <= target + timedelta(days=1)]
         if actual_in is None and day_punches:
@@ -519,7 +513,6 @@ def build_daily_report(attendance_df, shift_df, office_df, worker_df, target_dat
         name = workers.get(eid, "")
         shift = _shift_for(shift_df, eid, target)
 
-        # If no schedule, cannot classify as planned work.
         if not shift:
             rows.append(_row(eid, name, "CN", None, None, 0,
                              "Không có lịch", "abnormal"))
@@ -530,8 +523,6 @@ def build_daily_report(attendance_df, shift_df, office_df, worker_df, target_dat
                              "Nghỉ", "off"))
             continue
 
-        # N = 07:00-19:00 same day
-        # Đ = 19:00 target -> 07:00 next day
         if shift == "N":
             start = datetime.combine(target, time(7,0))
             end = datetime.combine(target, time(19,0))
@@ -539,7 +530,6 @@ def build_daily_report(attendance_df, shift_df, office_df, worker_df, target_dat
             start = datetime.combine(target, time(19,0))
             end = datetime.combine(target + timedelta(days=1), time(7,0))
         else:
-            # Allow shift strings that contain N or Đ.
             if "Đ" in shift or "D" == shift:
                 start = datetime.combine(target, time(19,0))
                 end = datetime.combine(target + timedelta(days=1), time(7,0))
@@ -553,7 +543,6 @@ def build_daily_report(attendance_df, shift_df, office_df, worker_df, target_dat
 
         actual_in, actual_out = _nearest_pair(punches.get(eid, []), start, end)
 
-        # For night shift, out is on the following day.
         note = ""
         group = "present"
         if actual_in is None and actual_out is None:
