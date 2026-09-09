@@ -124,7 +124,7 @@ if st.button("🚀 Chạy phân tích chấm công với Gemini AI", type="prima
                 for attempt in range(max_retries):
                     try:
                         response = client.models.generate_content(
-                            model='gemini-1.5-flash', # Dùng model ổn định
+                            model='gemini-2.5-flash', # Dùng model ổn định
                             contents=prompt,
                         )
                         break
