@@ -54,35 +54,33 @@ df_vp = load_uploaded_file(uploaded_staff_vp)
 df_cn = load_uploaded_file(uploaded_staff_cn)
 
 
-# --- PHẦN 2: CHỌN NGÀY TRỰC TIẾP TỪ CỘT NGÀY TRONG FILE VÂN TAY ---
+# --- PHẦN 2: CHỌN NGÀY TỪ CỘT 'Ngày' TRONG FILE VÂN TAY ---
 st.subheader("📅 2. 选择考勤核对日期 / Chọn ngày kiểm tra từ file vân tay")
 
 selected_date_str = ""
 df_fp_filtered = None
 
 if df_fp is not None:
-    # Tìm cột ngày trong file vân tay (ví dụ: cột có tên 'Ngày', 'Date', 'Ngay', v.v.)
-    date_col_candidates = [col for col in df_fp.columns if any(k in col.lower() for k in ['ngày', 'date', 'ngay', 'time', 'thời gian'])]
+    # Chuẩn hóa tên cột để tránh lỗi khoảng trắng thừa
+    df_fp.columns = df_fp.columns.str.strip()
     
-    if date_col_candidates:
-        date_col = date_col_candidates[0]
-        # Chuyển đổi định dạng ngày để lấy danh sách các ngày duy nhất
-        df_fp[date_col] = pd.to_datetime(df_fp[date_col], errors='coerce').dt.date
-        available_dates = sorted(df_fp[date_col].dropna().unique())
+    if 'Ngày' in df_fp.columns:
+        df_fp['Ngày_Clean'] = pd.to_datetime(df_fp['Ngày'], errors='coerce').dt.date
+        available_dates = sorted(df_fp['Ngày_Clean'].dropna().unique())
         
         if available_dates:
             selected_date = st.selectbox("选择文件中的日期 / Chọn ngày có trong file vân tay", available_dates)
             selected_date_str = str(selected_date)
             
-            # Lọc dữ liệu vân tay CHÍNH XÁC theo ngày được chọn trên dashboard
-            df_fp_filtered = df_fp[df_fp[date_col] == selected_date]
-            st.success(f"✅ 已选择日期 / Đã chọn ngày: **{selected_date_str}** (Số lượt bấm vân tay trong ngày: {len(df_fp_filtered)} dòng)")
+            # Lọc dữ liệu vân tay đúng theo ngày được chọn
+            df_fp_filtered = df_fp[df_fp['Ngày_Clean'] == selected_date]
+            st.success(f"✅ 已选择日期 / Đã chọn ngày: **{selected_date_str}** (Số bản ghi trong ngày: {len(df_fp_filtered)} dòng)")
         else:
-            st.warning("⚠️ Không nhận diện được dữ liệu ngày tháng hợp lệ trong cột ngày của file vân tay.")
+            st.warning("⚠️ Không nhận diện được định dạng ngày tháng trong cột 'Ngày'.")
     else:
-        st.error("❌ Không tìm thấy cột chứa thông tin 'Ngày' hoặc 'Date' trong file vân tay của bạn. Vui lòng kiểm tra lại tên cột.")
+        st.error("❌ Không tìm thấy cột 'Ngày' trong file vân tay.")
 else:
-    st.info("ℹ️ Vui lòng tải file Excel bấm vân tay lên ở bước 1 để hiển thị danh sách ngày.")
+    st.info("ℹ️ Vui lòng tải file Excel bấm vân tay lên ở bước 1.")
 
 
 # --- PHẦN 3: XỬ LÝ VÀ PHÂN TÍCH ---
@@ -94,22 +92,21 @@ if st.button("🚀 开始考勤核对分析 / Chạy phân tích chấm công", 
     elif df_fp_filtered is None or df_vp is None or df_cn is None:
         st.warning("请完整上传文件并选择有效日期 / Vui lòng tải đủ file và chọn ngày hợp lệ.")
     else:
-        with st.spinner("系统正在智能核对排班与考勤数据，请稍候... / Hệ thống đang đối chiếu dữ liệu theo ngày đã chọn..."):
+        with st.spinner("系统正在智能核对排班与考勤数据，请稍候..."):
             try:
                 client = genai.Client()
                 
-                # Chỉ đưa dữ liệu vân tay CỦA ĐÚNG NGÀY ĐƯỢC CHỌN vào để phân tích
                 fp_data = df_fp_filtered.to_string()
-                vp_data = df_vp.to_string()
-                cn_data = df_cn.to_string()
-                sc_data = df_sc.to_string() if df_sc is not None else "无排班文件 / Không có file lịch ca"
+                vp_data = df_vp.to_string() if df_vp is not None else "Không có"
+                cn_data = df_cn.to_string() if df_cn is not None else "Không có"
+                sc_data = df_sc.to_string() if df_sc is not None else "Không có"
 
                 prompt = f"""
                 Bạn là một hệ thống phân tích nhân sự và chấm công tự động thông minh. 
                 Hãy thực hiện đối chiếu và phân tích dữ liệu CHO ĐÚNG NGÀY: {selected_date_str}.
                 
-                DỮ LIỆU ĐẦU VÀO (Đã lọc theo ngày {selected_date_str}):
-                1. File bấm vân tay trong ngày:
+                DỮ LIỆU ĐẦU VÀO:
+                1. File bấm vân tay (các cột: Mã Nhân Viên, Tên nhân viên, Phòng ban, Ngày, Thứ, Giờ vào, Giờ ra):
                 {fp_data}
                 
                 2. Danh sách Nhân viên Văn Phòng (VP):
@@ -161,23 +158,21 @@ if st.button("🚀 开始考勤核对分析 / Chạy phân tích chấm công", 
                 st.error(f"处理出错 / Lỗi xử lý: {e}")
 
 if 'analysis_result' in st.session_state:
-    st.markdown(f"### 📋 异常考勤与核对结果 ({selected_date_str}) / Kết quả đối chiếu ngày {selected_date_str}")
+    st.markdown(f"### 📋 异常考勤与核对结果 ({selected_date_str})")
     st.markdown(st.session_state['analysis_result'])
 
 
-# --- PHẦN 4: THỐNG KÊ BIỂU ĐỒ THAY ĐỔI THEO NGÀY ĐÃ CHỌN ---
+# --- PHẦN 4: THỐNG KÊ BIỂU ĐỒ THEO NGÀY ĐÃ CHỌN ---
 st.subheader("📈 4. 考勤数据统计图表 / Biểu đồ thống kê theo ngày")
 
 total_vp = len(df_vp) if df_vp is not None else 0
 total_cn = len(df_cn) if df_cn is not None else 0
-
-# Tính toán số lượng thực tế có bấm vân tay trong ngày được chọn từ dashboard
-active_count = len(df_fp_filtered['Mã NV'].unique()) if (df_fp_filtered is not None and 'Mã NV' in df_fp_filtered.columns) else 0
+active_count = len(df_fp_filtered['Mã Nhân Viên'].unique()) if (df_fp_filtered is not None and 'Mã Nhân Viên' in df_fp_filtered.columns) else 0
 
 col_m1, col_m2, col_m3 = st.columns(3)
 col_m1.metric("办公室员工总数 / Tổng NV Văn Phòng", f"{total_vp} 人")
 col_m2.metric("工人总数 / Tổng Công Nhân", f"{total_cn} 人")
-col_m3.metric(f"当日打卡人数 ({selected_date_str})", f"{active_count} 人", delta="Cập nhật theo ngày chọn")
+col_m3.metric(f"当日打卡人数 ({selected_date_str})", f"{active_count} 人")
 
 if total_vp > 0 or total_cn > 0:
     chart_data = pd.DataFrame({
@@ -209,7 +204,7 @@ with col_dl1:
         excel_data = output.getvalue()
         
         st.download_button(
-            label=f"📥 下载 {selected_date_str} Excel 报 cáo / Tải xuống Excel ngày {selected_date_str}",
+            label=f"📥 下载 Excel 报 cáo / Tải xuống file Excel",
             data=excel_data,
             file_name=f"Attendance_Report_{selected_date_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
