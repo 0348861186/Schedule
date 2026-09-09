@@ -1353,6 +1353,4 @@ if "final_report" in st.session_state:
 else:
     st.info("Sau khi chạy đối chiếu, kết quả sẽ xuất hiện tại đây.")
 '''
-path = Path("/mnt/data/app_CODE4_cham_cong.py")
-path.write_text(code, encoding="utf-8")
 print(path)
