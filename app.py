@@ -36,29 +36,31 @@ with col2:
     uploaded_staff_vp = st.file_uploader("3) 上传办公室员工名单 (NV) / Tải file danh sách nhân viên VP", type=["xlsx", "xls", "csv"])
     uploaded_staff_cn = st.file_uploader("4) 上传工人名单 (CN) / Tải file danh sách công nhân", type=["xlsx", "xls", "csv"])
 
-# Hàm hỗ trợ đọc file thông minh (Tự động nhận diện dòng tiêu đề nếu file có chứa dòng tiêu đề báo cáo)
-def load_uploaded_file(uploaded_file, is_fingerprint=False):
+# Hàm đọc file thông minh: Tự động tìm dòng chứa tiêu đề thật (Mã Nhân Viên, Ngày, Giờ vào...)
+def load_smart_excel(uploaded_file):
     if uploaded_file is not None:
         try:
             if uploaded_file.name.endswith('.csv'):
                 return pd.read_csv(uploaded_file)
             else:
-                # Đọc thử với header=0
-                df = pd.read_excel(uploaded_file)
-                if is_fingerprint:
-                    # Kiểm tra nếu dòng đầu chứa tiêu đề gộp như 'CHI TIẾT CHẤM CÔNG', chuyển sang header=1
-                    cols_str = " ".join([str(c) for c in df.columns])
-                    if "CHI TIẾT CHẤM CÔNG" in cols_str or not any('mã' in str(c).lower() for c in df.columns):
-                        df = pd.read_excel(uploaded_file, header=1)
-                return df
+                # Đọc trước 10 dòng đầu để dò tìm dòng chứa từ khóa tiêu đề cột
+                df_raw = pd.read_excel(uploaded_file, header=None)
+                header_row = 0
+                for idx, row in df_raw.iterrows():
+                    row_str = " ".join([str(val).lower() for val in row.values])
+                    if 'mã' in row_str or 'ngày' in row_str or 'nhân viên' in row_str:
+                        header_row = idx
+                        break
+                # Đọc lại file với dòng tiêu đề chính xác vừa tìm được
+                return pd.read_excel(uploaded_file, header=header_row)
         except Exception as e:
             st.error(f"文件读取错误 / Lỗi đọc file: {e}")
     return None
 
-df_fp = load_uploaded_file(uploaded_fingerprint, is_fingerprint=True)
-df_sc = load_uploaded_file(uploaded_schedule)
-df_vp = load_uploaded_file(uploaded_staff_vp)
-df_cn = load_uploaded_file(uploaded_staff_cn)
+df_fp = load_smart_excel(uploaded_fingerprint)
+df_sc = load_smart_excel(uploaded_schedule)
+df_vp = load_smart_excel(uploaded_staff_vp)
+df_cn = load_smart_excel(uploaded_staff_cn)
 
 
 # --- PHẦN 2: CHỌN NGÀY TỪ CỘT 'Ngày' TRONG FILE VÂN TAY ---
@@ -69,7 +71,7 @@ df_fp_filtered = None
 
 if df_fp is not None:
     # Chuẩn hóa tên cột (xóa khoảng trắng thừa)
-    df_fp.columns = df_fp.columns.str.strip()
+    df_fp.columns = df_fp.columns.astype(str).str.strip()
     
     # Tìm kiếm cột ngày linh hoạt
     date_col = next((col for col in df_fp.columns if 'ngày' in col.lower() or 'date' in col.lower() or 'ngay' in col.lower()), None)
@@ -88,7 +90,7 @@ if df_fp is not None:
         else:
             st.warning("⚠️ Không nhận diện được định dạng ngày tháng trong cột 'Ngày'.")
     else:
-        st.error(f"❌ Không tìm thấy cột 'Ngày' trong file vân tay. Các cột hiện có: {list(df_fp.columns)}")
+        st.error(f"❌ Không tìm thấy cột 'Ngày' trong file vân tay. Các cột hệ thống đọc được là: {list(df_fp.columns)}")
 else:
     st.info("ℹ️ Vui lòng tải file Excel bấm vân tay lên ở bước 1.")
 
@@ -116,7 +118,7 @@ if st.button("🚀 开始考勤核对分析 / Chạy phân tích chấm công", 
                 Hãy thực hiện đối chiếu và phân tích dữ liệu CHO ĐÚNG NGÀY: {selected_date_str}.
                 
                 DỮ LIỆU ĐẦU VÀO:
-                1. File bấm vân tay (các cột: STT, Mã Nhân Viên, Tên nhân viên, Phòng ban, Ngày, Thứ, Giờ vào, Giờ ra, Tổng giờ):
+                1. File bấm vân tay:
                 {fp_data}
                 
                 2. Danh sách Nhân viên Văn Phòng (VP):
@@ -178,7 +180,6 @@ st.subheader("📈 4. 考勤数据统计图表 / Biểu đồ thống kê theo n
 total_vp = len(df_vp) if df_vp is not None else 0
 total_cn = len(df_cn) if df_cn is not None else 0
 
-# Tìm tên cột mã nhân viên linh hoạt
 id_col_fp = next((col for col in df_fp_filtered.columns if 'mã' in col.lower() or 'id' in col.lower()), None) if df_fp_filtered is not None else None
 active_count = len(df_fp_filtered[id_col_fp].unique()) if (df_fp_filtered is not None and id_col_fp) else 0
 
