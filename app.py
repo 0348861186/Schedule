@@ -14,14 +14,13 @@ st.set_page_config(
     layout="wide"
 )
 
-# Cấu hình API Key Gemini ở Sidebar (Ẩn danh thuật ngữ AI trên giao diện chính)
+# Cấu hình API Key Gemini ở Sidebar (Không có chữ AI trên giao diện)
 st.sidebar.header("⚙️ 系统配置 / Cấu hình hệ thống")
 api_key = st.sidebar.text_input("Nhập API Key", type="password")
 
 if api_key:
     os.environ["GEMINI_API_KEY"] = api_key
 
-# Tiêu đề song ngữ Trung - Việt (Không có chữ AI)
 st.title("📊 员工考勤与统计仪表盘")
 st.markdown("### Dashboard Thống Kê & Phân Tích Chấm Công Nhân Sự")
 
@@ -55,25 +54,35 @@ df_vp = load_uploaded_file(uploaded_staff_vp)
 df_cn = load_uploaded_file(uploaded_staff_cn)
 
 
-# --- PHẦN 2: CHỌN NGÀY, THÁNG, NĂM TỪ FILE VÂN TAY ---
-st.subheader("📅 2. 选择考勤核对日期 / Chọn ngày, tháng, năm đối chiếu")
+# --- PHẦN 2: CHỌN NGÀY TRỰC TIẾP TỪ CỘT NGÀY TRONG FILE VÂN TAY ---
+st.subheader("📅 2. 选择考勤核对日期 / Chọn ngày kiểm tra từ file vân tay")
 
 selected_date_str = ""
+df_fp_filtered = None
+
 if df_fp is not None:
-    st.success("✅ 指纹数据已加载成功 / Đã tải thành công dữ liệu vân tay.")
-    # Cố gắng tìm cột ngày tháng trong file vân tay hoặc cho phép chọn thủ công linh hoạt
-    col_d, col_m, col_y = st.columns(3)
-    with col_d:
-        selected_day = st.selectbox("日期 / Ngày", list(range(1, 32)), index=5)
-    with col_m:
-        selected_month = st.selectbox("月份 / Tháng", list(range(1, 13)), index=8)
-    with col_y:
-        selected_year = st.selectbox("年份 / Năm", [2025, 2026, 2027], index=1)
+    # Tìm cột ngày trong file vân tay (ví dụ: cột có tên 'Ngày', 'Date', 'Ngay', v.v.)
+    date_col_candidates = [col for col in df_fp.columns if any(k in col.lower() for k in ['ngày', 'date', 'ngay', 'time', 'thời gian'])]
     
-    selected_date_str = f"{selected_year}-{selected_month:02d}-{selected_day:02d}"
-    st.info(f"当前选择核对日期 / Ngày đang chọn đối chiếu: **{selected_day}/{selected_month}/{selected_year}**")
+    if date_col_candidates:
+        date_col = date_col_candidates[0]
+        # Chuyển đổi định dạng ngày để lấy danh sách các ngày duy nhất
+        df_fp[date_col] = pd.to_datetime(df_fp[date_col], errors='coerce').dt.date
+        available_dates = sorted(df_fp[date_col].dropna().unique())
+        
+        if available_dates:
+            selected_date = st.selectbox("选择文件中的日期 / Chọn ngày có trong file vân tay", available_dates)
+            selected_date_str = str(selected_date)
+            
+            # Lọc dữ liệu vân tay CHÍNH XÁC theo ngày được chọn trên dashboard
+            df_fp_filtered = df_fp[df_fp[date_col] == selected_date]
+            st.success(f"✅ 已选择日期 / Đã chọn ngày: **{selected_date_str}** (Số lượt bấm vân tay trong ngày: {len(df_fp_filtered)} dòng)")
+        else:
+            st.warning("⚠️ Không nhận diện được dữ liệu ngày tháng hợp lệ trong cột ngày của file vân tay.")
+    else:
+        st.error("❌ Không tìm thấy cột chứa thông tin 'Ngày' hoặc 'Date' trong file vân tay của bạn. Vui lòng kiểm tra lại tên cột.")
 else:
-    st.warning("⚠️ 请先上传指纹打卡文件以选择日期 / Vui lòng tải file vân tay lên trước để chọn ngày.")
+    st.info("ℹ️ Vui lòng tải file Excel bấm vân tay lên ở bước 1 để hiển thị danh sách ngày.")
 
 
 # --- PHẦN 3: XỬ LÝ VÀ PHÂN TÍCH ---
@@ -82,24 +91,25 @@ st.subheader("🤖 3. 智能数据核对与分析 / Phân tích & Đối chiếu
 if st.button("🚀 开始考勤核对分析 / Chạy phân tích chấm công", type="primary"):
     if not api_key:
         st.warning("请输入 API Key 以继续 / Vui lòng nhập API Key ở thanh bên.")
-    elif df_fp is None or df_vp is None or df_cn is None:
-        st.warning("请完整上传指纹、办公室及工人名单文件 / Vui lòng tải đủ file vân tay, danh sách VP và CN.")
+    elif df_fp_filtered is None or df_vp is None or df_cn is None:
+        st.warning("请完整上传文件并选择有效日期 / Vui lòng tải đủ file và chọn ngày hợp lệ.")
     else:
-        with st.spinner("系统正在智能核对排班与考勤数据，请稍候... / Hệ thống đang đối chiếu dữ liệu, vui lòng đợi..."):
+        with st.spinner("系统正在智能核对排班与考勤数据，请稍候... / Hệ thống đang đối chiếu dữ liệu theo ngày đã chọn..."):
             try:
                 client = genai.Client()
                 
-                fp_data = df_fp.to_string()
+                # Chỉ đưa dữ liệu vân tay CỦA ĐÚNG NGÀY ĐƯỢC CHỌN vào để phân tích
+                fp_data = df_fp_filtered.to_string()
                 vp_data = df_vp.to_string()
                 cn_data = df_cn.to_string()
                 sc_data = df_sc.to_string() if df_sc is not None else "无排班文件 / Không có file lịch ca"
 
                 prompt = f"""
                 Bạn là một hệ thống phân tích nhân sự và chấm công tự động thông minh. 
-                Hãy thực hiện đối chiếu và phân tích dữ liệu cho ngày: {selected_date_str}.
+                Hãy thực hiện đối chiếu và phân tích dữ liệu CHO ĐÚNG NGÀY: {selected_date_str}.
                 
-                DỮ LIỆU ĐẦU VÀO:
-                1. File bấm vân tay:
+                DỮ LIỆU ĐẦU VÀO (Đã lọc theo ngày {selected_date_str}):
+                1. File bấm vân tay trong ngày:
                 {fp_data}
                 
                 2. Danh sách Nhân viên Văn Phòng (VP):
@@ -112,6 +122,7 @@ if st.button("🚀 开始考勤核对分析 / Chạy phân tích chấm công", 
                 {sc_data}
                 
                 QUY TẮC NGHIỆP VỤ BẮT BUỘC:
+                - Ngày kiểm tra: {selected_date_str}.
                 - Văn phòng (VP): Giờ vào chuẩn 08:00 AM, Giờ ra chuẩn 17:00 PM (8 tiếng/ngày). Chủ nhật nghỉ. Nếu đủ giờ nhưng về sớm -> ghi chú "về sớm" kèm giờ làm thực tế. Nếu ngày làm việc không bấm thẻ -> "vắng".
                 - Mã nhân viên đặc biệt:
                   + Mã “575”: Giờ vào chuẩn 7:00 AM, Giờ ra chuẩn 15:00 PM.
@@ -123,7 +134,7 @@ if st.button("🚀 开始考勤核对分析 / Chạy phân tích chấm công", 
                 - TRỌNG TÂM: Chỉ tập trung đưa ra các trường hợp bất thường (Ví dụ: "đi trễ", "về sớm", "làm không đúng lịch", "vắng", "BV", "BR", "Lễ"). Không dài dòng.
                 
                 YÊU CẦU ĐẦU RA:
-                Trả về một bảng Markdown gồm đúng các cột sau (bằng tiếng Việt hoặc song ngữ):
+                Trả về một bảng Markdown gồm đúng các cột sau:
                 Mã NV | Họ và Tên | Giờ vào | Giờ ra | Giờ làm thực tế | Ghi chú
                 """
 
@@ -150,26 +161,30 @@ if st.button("🚀 开始考勤核对分析 / Chạy phân tích chấm công", 
                 st.error(f"处理出错 / Lỗi xử lý: {e}")
 
 if 'analysis_result' in st.session_state:
-    st.markdown("### 📋 异常考勤与核对结果 / Kết quả đối chiếu & trường hợp bất thường")
+    st.markdown(f"### 📋 异常考勤与核对结果 ({selected_date_str}) / Kết quả đối chiếu ngày {selected_date_str}")
     st.markdown(st.session_state['analysis_result'])
 
 
-# --- PHẦN 4: THỐNG KÊ BIỂU ĐỒ CHUYÊN NGHIỆP ---
-st.subheader("📈 4. 考勤数据统计图表 / Biểu đồ thống kê chuyên nghiệp")
+# --- PHẦN 4: THỐNG KÊ BIỂU ĐỒ THAY ĐỔI THEO NGÀY ĐÃ CHỌN ---
+st.subheader("📈 4. 考勤数据统计图表 / Biểu đồ thống kê theo ngày")
 
 total_vp = len(df_vp) if df_vp is not None else 0
 total_cn = len(df_cn) if df_cn is not None else 0
 
-col_m1, col_m2 = st.columns(2)
+# Tính toán số lượng thực tế có bấm vân tay trong ngày được chọn từ dashboard
+active_count = len(df_fp_filtered['Mã NV'].unique()) if (df_fp_filtered is not None and 'Mã NV' in df_fp_filtered.columns) else 0
+
+col_m1, col_m2, col_m3 = st.columns(3)
 col_m1.metric("办公室员工总数 / Tổng NV Văn Phòng", f"{total_vp} 人")
 col_m2.metric("工人总数 / Tổng Công Nhân", f"{total_cn} 人")
+col_m3.metric(f"当日打卡人数 ({selected_date_str})", f"{active_count} 人", delta="Cập nhật theo ngày chọn")
 
 if total_vp > 0 or total_cn > 0:
     chart_data = pd.DataFrame({
-        '部门 / Bộ phận': ['办公室 (VP)', '工人 (CN)'],
-        '人数 / Số lượng': [total_vp, total_cn]
+        '状态 / Trạng thái': ['Văn phòng tổng', 'Công nhân tổng', 'Đã bấm vân tay trong ngày'],
+        '人数 / Số lượng': [total_vp, total_cn, active_count]
     })
-    fig = px.bar(chart_data, x='部门 / Bộ phận', y='人数 / Số lượng', color='部门 / Bộ phận', text_auto=True)
+    fig = px.bar(chart_data, x='状态 / Trạng thái', y='人数 / Số lượng', color='状态 / Trạng thái', text_auto=True)
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -182,7 +197,6 @@ with col_dl1:
     if 'analysis_result' in st.session_state:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Các cột đúng yêu cầu: mã NV, họ và tên, giờ vào, giờ ra, giờ làm thực tế, ghi chú
             df_export = pd.DataFrame({
                 "Mã NV": ["VP01", "CN01"],
                 "Họ và Tên": ["Nguyễn Văn A", "Trần Văn B"],
@@ -191,11 +205,11 @@ with col_dl1:
                 "Giờ làm thực tế": ["8", "12"],
                 "Ghi chú": ["Bình thường", "về sớm"]
             })
-            df_export.to_excel(writer, index=False, sheet_name='ThongKeChamCong')
+            df_export.to_excel(writer, index=False, sheet_name=f'ChamCong_{selected_date_str}')
         excel_data = output.getvalue()
         
         st.download_button(
-            label="📥 下载 Excel 考勤报 cáo / Tải xuống file Excel",
+            label=f"📥 下载 {selected_date_str} Excel 报 cáo / Tải xuống Excel ngày {selected_date_str}",
             data=excel_data,
             file_name=f"Attendance_Report_{selected_date_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -212,10 +226,10 @@ with col_dl2:
             pdf.set_font("Arial", size=12)
             pdf.cell(200, 10, txt=f"ATTENDANCE REPORT - {selected_date_str}", ln=1, align="C")
             pdf.ln(10)
+            pdf.cell(200, 10, txt=f"Selected Date: {selected_date_str}", ln=1)
             pdf.cell(200, 10, txt=f"Total Office Staff (VP): {total_vp}", ln=1)
             pdf.cell(200, 10, txt=f"Total Workers (CN): {total_cn}", ln=1)
-            pdf.ln(5)
-            pdf.cell(200, 10, txt="Focus on abnormal attendance records.", ln=1)
+            pdf.cell(200, 10, txt=f"Active Attendance Count: {active_count}", ln=1)
             
             pdf_bytes = pdf.output(dest='S').encode('latin1')
             st.download_button(
