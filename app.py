@@ -1,5 +1,12 @@
 from pathlib import Path
 
+file_path = Path(path)
+# Tạo thư mục cha nếu chưa tồn tại (parents=True giúp tạo cả thư mục cha lồng nhau)
+file_path.parent.mkdir(parents=True, exist_ok=True)
+
+# Sau đó mới tiến hành ghi tệp
+file_path.write_text(code, encoding="utf-8")
+
 code = r'''import io
 import os
 import re
