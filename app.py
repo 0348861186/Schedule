@@ -126,20 +126,25 @@ if f_finger and f_schedule and f_vp and f_cn:
             
             # --- Nhận diện thông minh các cột mấu chốt qua Trí tuệ điện tử ---
             id_finger = dynamic_column_mapping(list(df_finger.columns), "mã số nhân viên hoặc số thẻ chấm công")
-            date_finger = dynamic_column_mapping(list(df_finger.columns), "ngày hoặc ngày tháng năm")
-            time_finger = dynamic_column_mapping(list(df_finger.columns), "thời gian quét vân tay hoặc giờ bấm thẻ")
-            
-            id_vp = dynamic_column_mapping(list(df_master_vp.columns), "mã nhân viên văn phòng")
-            name_vp = dynamic_column_mapping(list(df_master_vp.columns), "họ và tên nhân viên văn phòng")
-            
-            id_cn = dynamic_column_mapping(list(df_master_cn.columns), "mã công nhân nhà máy")
-            name_cn = dynamic_column_mapping(list(df_master_cn.columns), "họ và tên công nhân")
-            
-            id_sched = dynamic_column_mapping(list(df_sched.columns), "mã số nhân viên hoặc mã công nhân trong lịch ca")
+if id_finger not in df_finger.columns:
+    id_finger = next((c for c in df_finger.columns if any(k in str(c).lower() for k in ['mã', 'id', 'the', 'thẻ'])), df_finger.columns[0])
 
-            # Chuẩn hóa cột ngày tháng của dữ liệu vân tay
-            df_finger['Standard_Date'] = pd.to_datetime(df_finger[date_finger], errors='coerce').dt.date
-            df_finger_today = df_finger[df_finger['Standard_Date'] == target_date]
+date_finger = dynamic_column_mapping(list(df_finger.columns), "ngày hoặc ngày tháng năm")
+if date_finger not in df_finger.columns:
+    date_finger = next((c for c in df_finger.columns if any(k in str(c).lower() for k in ['ngày', 'date', 'ngay'])), None)
+
+time_finger = dynamic_column_mapping(list(df_finger.columns), "thời gian quét vân tay hoặc giờ bấm thẻ")
+if time_finger not in df_finger.columns:
+    time_finger = next((c for c in df_finger.columns if any(k in str(c).lower() for k in ['giờ', 'time', 'thời gian', 'gio'])), None)
+
+# Kiểm tra an toàn trước khi chuyển đổi
+if not date_finger:
+    st.error("Không tìm thấy cột chứa 'Ngày' trong file vân tay. Vui lòng kiểm tra lại file Excel.")
+    st.stop()
+
+# Chuẩn hóa cột ngày tháng của dữ liệu vân tay
+df_finger['Standard_Date'] = pd.to_datetime(df_finger[date_finger], errors='coerce').dt.date
+df_finger_today = df_finger[df_finger['Standard_Date'] == target_date]
             
             rows_output = []
             is_sunday = (target_date.weekday() == 6) # Kiểm tra xem ngày chọn có phải Chủ Nhật hay không
