@@ -1,12 +1,14 @@
 from pathlib import Path
-import zipfile, textwrap, os
 
 root = Path("/mnt/data/attendance_streamlit_project")
-if root.exists():
-    import shutil
-    shutil.rmtree(root)
-(root / "modules").mkdir(parents=True)
-(root / ".streamlit").mkdir(parents=True)
+for file_path in root.glob("**/*"):
+    if file_path.is_file():
+        content = file_path.read_text(encoding="utf-8")
+        # Thay thế các khoảng trắng đặc biệt (U+00A0) thành khoảng trắng thường
+        cleaned_content = content.replace("\xa0", "    ")
+        file_path.write_text(cleaned_content, encoding="utf-8")
+
+print("Đã làm sạch khoảng trắng ẩn trong toàn bộ dự án!")
 
 files = {}
 
