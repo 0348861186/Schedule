@@ -1,407 +1,1358 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import datetime
-from google import genai
-import io
-import plotly.express as px
-import plotly.graph_objects as go
+from pathlib import Path
 
-# ==========================================
-# 0. CẤU HÌNH GIAO DIỆN & NGÔN NGỮ (SONG NGỮ KHÔNG CHỨA TỪ "AI")
-# ==========================================
-st.set_page_config(page_title="Hệ Thống Thống Kê Chấm Công", layout="wide")
+code = r'''# app.py
+# ============================================================
+# CODE 4 - HỆ THỐNG ĐỐI CHIẾU CHẤM CÔNG NÂNG CẤP
+# Kiến trúc:
+#   70% CODE 2: engine xác định chấm công bằng Python
+#   20% CODE 1: Smart Excel Loader + giao diện dễ dùng
+#   10% CODE 3: dashboard song ngữ + báo cáo bất thường
+#
+# Nguyên tắc:
+#   - Python quyết định giờ vào/ra, số giờ, BV/BR, vắng, trễ, về sớm.
+#   - Gemini CHỈ hỗ trợ nhận diện tên cột và tóm tắt bất thường.
+#   - Có fallback không cần Gemini nếu cấu hình API chưa có.
+# ============================================================
+
+import io
+import re
+import time
+import datetime as dt
+from typing import Optional, Dict, List, Tuple
+
+import pandas as pd
+import streamlit as st
+import plotly.express as px
+
+try:
+    from google import genai
+except ImportError:
+    genai = None
+
+
+# ============================================================
+# 0. PAGE CONFIG
+# ============================================================
+
+st.set_page_config(
+    page_title="Dashboard Chấm Công / 考勤 Dashboard",
+    page_icon="📊",
+    layout="wide",
+)
+
+# ============================================================
+# 1. NGÔN NGỮ
+# ============================================================
+
+LANG = {
+    "vi": {
+        "title": "📊 HỆ THỐNG ĐỐI CHIẾU & PHÂN TÍCH CHẤM CÔNG",
+        "subtitle": "Dashboard Thống Kê Chấm Công Nhân Sự",
+        "switch": "切换至中文 (Chuyển sang tiếng Trung)",
+        "upload": "📁 1. Tải dữ liệu",
+        "finger": "1) File bấm vân tay",
+        "schedule": "2) File lịch xếp ca công nhân",
+        "vp": "3) Danh sách nhân viên Văn phòng",
+        "cn": "4) Danh sách Công nhân",
+        "date": "📅 2. Chọn ngày kiểm tra",
+        "run": "🚀 Chạy đối chiếu chấm công",
+        "settings": "⚙️ Cấu hình",
+        "gemini_key": "Gemini API Key (tùy chọn)",
+        "gemini_help": "Gemini chỉ hỗ trợ nhận diện cột và tóm tắt; không quyết định kết quả chấm công.",
+        "dashboard": "📈 3. Tổng quan",
+        "abnormal": "🚨 4. Các trường hợp bất thường",
+        "export": "💾 5. Xuất báo cáo",
+        "total": "Tổng nhân sự dự kiến",
+        "normal": "Bình thường",
+        "abnormal_count": "Bất thường",
+        "absent": "Vắng",
+        "off": "Nghỉ",
+        "all": "Tất cả",
+        "none": "Không có dữ liệu",
+        "excel": "📥 Tải Excel kết quả",
+        "summary": "Tóm tắt bất thường",
+        "no_abnormal": "✅ Không phát hiện bất thường.",
+        "mapping": "Ánh xạ cột",
+        "engine": "Kết quả xử lý",
+        "show_raw": "Xem dữ liệu chuẩn hóa",
+    },
+    "zh": {
+        "title": "📊 员工考勤核对与分析系统",
+        "subtitle": "考勤统计 Dashboard",
+        "switch": "Chuyển sang tiếng Việt (切换至越南语)",
+        "upload": "📁 1. 上传数据",
+        "finger": "1) 指纹打卡文件",
+        "schedule": "2) 工人排班文件",
+        "vp": "3) 办公室员工名单",
+        "cn": "4) 工人名单",
+        "date": "📅 2. 选择检查日期",
+        "run": "🚀 开始考勤核对",
+        "settings": "⚙️ 系统配置",
+        "gemini_key": "Gemini API Key（可选）",
+        "gemini_help": "Gemini 仅用于列名识别和异常摘要，不负责决定考勤结果。",
+        "dashboard": "📈 3. 总览",
+        "abnormal": "🚨 4. 异常情况",
+        "export": "💾 5. 导出报告",
+        "total": "预计人员",
+        "normal": "正常",
+        "abnormal_count": "异常",
+        "absent": "缺勤",
+        "off": "休息",
+        "all": "全部",
+        "none": "暂无数据",
+        "excel": "📥 下载 Excel 结果",
+        "summary": "异常摘要",
+        "no_abnormal": "✅ 未发现异常。",
+        "mapping": "列名映射",
+        "engine": "处理结果",
+        "show_raw": "查看标准化数据",
+    },
+}
 
 if "lang" not in st.session_state:
     st.session_state.lang = "vi"
 
-# Bộ từ điển song ngữ Trung - Việt (Không chứa từ "AI")
-LANG_DICT = {
-    "vi": {
-        "title": "📊 HỆ THỐNG PHÂN TÍCH CHẤM CÔNG THÔNG MINH BẤT ĐỊNH VĂN BẢN",
-        "upload_section": "📁 Tải Lên Dữ Liệu Hệ Thống",
-        "btn_lang": "切换至中文 (Chuyển sang tiếng Trung)",
-        "file_finger": "1. File dữ liệu bấm vân tay máy chấm công",
-        "file_schedule": "2. File lịch xếp ca làm việc (Công nhân)",
-        "file_vp": "3. Danh sách nhân viên Văn phòng (VP)",
-        "file_cn": "4. Danh sách Công nhân nhà máy",
-        "filter_section": "📆 Bộ Lọc Thời Gian Kiểm Tra",
-        "select_date": "Chọn ngày cần kết xuất báo cáo:",
-        "analyze_btn": "🚀 Bắt Đầu Phân Tích & Đối Chiếu Dữ Liệu",
-        "dashboard_stat": "📈 Bảng Thống Kê Phân Tích Chuyên Nghiệp",
-        "abnormal_focus": "🚨 Trọng Tâm Các Trường Hợp Bất Thường (Cần Lưu Ý)",
-        "total_staff": "Tổng nhân sự dự kiến",
-        "total_present": "Đi làm đúng / đủ",
-        "total_abnormal": "Số ca bất thường",
-        "total_absent": "Vắng mặt",
-        "export_section": "📥 Xuất Báo Cáo Thống Kê",
-        "download_excel": "Tải file kết quả Excel (.xlsx)",
-        "download_pdf": "Tải file giao diện PDF",
-        "col_eid": "Mã NV", "col_name": "Họ và tên", "col_in": "Giờ vào", 
-        "col_out": "Giờ ra", "col_hours": "Giờ làm thực tế", "col_note": "Ghi chú"
-    },
-    "zh": {
-        "title": "📊 智能文本泛化考勤分析与对账系统",
-        "upload_section": "📁 系统数据上传",
-        "btn_lang": "Chuyển sang tiếng Việt (切换至越南语)",
-        "file_finger": "1. 考勤机指纹打卡原始数据文件",
-        "file_schedule": "2. 排班表文件 (车间工人)",
-        "file_vp": "3. 办公室人员花名册 (VP)",
-        "file_cn": "4. 车间工人花名册",
-        "filter_section": "📆 检查时间筛选",
-        "select_date": "选择需要生成报告的日期:",
-        "analyze_btn": "🚀 开始智能数据对账与分析",
-        "dashboard_stat": "📈 专业考勤数据图表分析",
-        "abnormal_focus": "🚨 异常考勤重点关注摘要 (精简)",
-        "total_staff": "预计总出勤人数",
-        "total_present": "正常出勤人数",
-        "total_abnormal": "异常打卡人数",
-        "total_absent": "旷工/缺勤人数",
-        "export_section": "📥 导出统计报告",
-        "download_excel": "下载 Excel 统计表 (.xlsx)",
-        "download_pdf": "下载当前 PDF 报表页面",
-        "col_eid": "工号", "col_name": "姓名", "col_in": "签到时间", 
-        "col_out": "签退時間", "col_hours": "实际工时", "col_note": "考勤备注"
-    }
-}
+L = LANG[st.session_state.lang]
 
-l = LANG_DICT[st.session_state.lang]
-
-# Nút chuyển đổi ngôn ngữ nhanh trên thanh Sidebar
-if st.sidebar.button(l["btn_lang"]):
+if st.sidebar.button(L["switch"]):
     st.session_state.lang = "zh" if st.session_state.lang == "vi" else "vi"
     st.rerun()
 
-st.title(l["title"])
+st.title(L["title"])
+st.caption(L["subtitle"])
 
-# ==========================================
-# 1. KẾT NỐI HỆ THỐNG TRÍ TUỆ ĐIỆN TỬ (GEMINI CLIENT)
-# ==========================================
-if "GEMINI_API_KEY" in st.secrets:
-    client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-else:
-    st.error("Chưa cấu hình khóa bảo mật GEMINI_API_KEY trên Streamlit Cloud!")
-    st.stop()
 
-# Hàm trung gian gửi danh sách cột qua hệ thống Trí tuệ điện tử để phân tích ngữ nghĩa tự động
-def dynamic_column_mapping(columns_list, target_concept):
+# ============================================================
+# 2. CẤU HÌNH
+# ============================================================
+
+with st.sidebar:
+    st.header(L["settings"])
+
+    gemini_key = st.text_input(
+        L["gemini_key"],
+        type="password",
+        help=L["gemini_help"],
+    )
+
+    st.caption(
+        "Có thể dùng GEMINI_API_KEY trong Streamlit Secrets để không nhập mỗi lần."
+    )
+
+    # Các quy tắc ca đặc biệt được đưa ra UI để tránh hard-code khó sửa.
+    st.markdown("### Quy tắc VP")
+    vp_default_in = st.text_input("VP giờ vào mặc định", "08:00")
+    vp_default_out = st.text_input("VP giờ ra mặc định", "17:00")
+    late_grace = st.number_input("Cho phép trễ (phút)", min_value=0, max_value=60, value=5)
+
+    st.markdown("### Nhân sự đặc biệt")
+    st.caption("Có thể sửa giờ trực tiếp khi doanh nghiệp thay đổi quy định.")
+
+    special_575_in = st.text_input("Mã 575 - vào", "07:00")
+    special_575_out = st.text_input("Mã 575 - ra", "15:00")
+    special_575_expected = st.number_input(
+        "Mã 575 - giờ công chuẩn",
+        min_value=0.0,
+        max_value=24.0,
+        value=8.0,
+        step=0.5,
+    )
+
+    special_749_in = st.text_input("Mã 749/949 - vào", "07:00")
+    special_749_out = st.text_input("Mã 749/949 - ra", "19:00")
+    special_749_expected = st.number_input(
+        "Mã 749/949 - giờ công chuẩn",
+        min_value=0.0,
+        max_value=24.0,
+        value=12.0,
+        step=0.5,
+    )
+
+
+# ============================================================
+# 3. SMART EXCEL LOADER - lấy từ tinh thần CODE 1, nhưng an toàn hơn
+# ============================================================
+
+def normalize_col_name(x) -> str:
+    if x is None:
+        return ""
+    return str(x).strip()
+
+
+def load_smart_excel(uploaded_file) -> Optional[pd.DataFrame]:
+    """Đọc Excel/CSV và tự tìm dòng header hợp lý."""
+    if uploaded_file is None:
+        return None
+
+    try:
+        name = uploaded_file.name.lower()
+
+        if name.endswith(".csv"):
+            # thử UTF-8 rồi fallback cp1258
+            uploaded_file.seek(0)
+            try:
+                return pd.read_csv(uploaded_file)
+            except UnicodeDecodeError:
+                uploaded_file.seek(0)
+                return pd.read_csv(uploaded_file, encoding="cp1258")
+
+        uploaded_file.seek(0)
+        raw = pd.read_excel(uploaded_file, header=None)
+
+        if raw.empty:
+            return pd.DataFrame()
+
+        keywords = [
+            "mã", "ma", "id", "nhân viên", "nhan vien",
+            "ngày", "ngay", "date", "thời gian", "thoi gian",
+            "time", "giờ", "gio"
+        ]
+
+        best_row = 0
+        best_score = -1
+
+        for idx, row in raw.iterrows():
+            text = " | ".join(str(v).strip().lower() for v in row.tolist())
+            score = sum(1 for k in keywords if k in text)
+            if score > best_score:
+                best_score = score
+                best_row = idx
+
+        df = pd.read_excel(uploaded_file, header=best_row)
+        df.columns = [normalize_col_name(c) for c in df.columns]
+
+        # bỏ cột Unnamed hoàn toàn rỗng
+        keep = []
+        for c in df.columns:
+            if str(c).lower().startswith("unnamed"):
+                if df[c].notna().sum() == 0:
+                    continue
+            keep.append(c)
+
+        return df[keep].copy()
+
+    except Exception as e:
+        st.error(f"Lỗi đọc file: {e}")
+        return None
+
+
+# ============================================================
+# 4. CHUẨN HÓA GIÁ TRỊ
+# ============================================================
+
+def normalize_id(value) -> str:
+    """00123, 123, 123.0 -> 123; giữ mã chữ nếu có."""
+    if pd.isna(value):
+        return ""
+
+    s = str(value).strip()
+
+    if s.lower() in {"nan", "none", "nat", ""}:
+        return ""
+
+    # 123.0 -> 123
+    if re.fullmatch(r"\d+\.0+", s):
+        s = s.split(".")[0]
+
+    # 00123 -> 123 (phù hợp phần lớn máy chấm công)
+    if s.isdigit():
+        s = str(int(s))
+
+    return s
+
+
+def clean_name(value) -> str:
+    if pd.isna(value):
+        return ""
+    return re.sub(r"\s+", " ", str(value).strip())
+
+
+def parse_datetime_value(value) -> pd.Timestamp:
+    if pd.isna(value):
+        return pd.NaT
+    return pd.to_datetime(value, errors="coerce")
+
+
+def parse_time_value(value) -> Optional[dt.time]:
+    if pd.isna(value):
+        return None
+
+    if isinstance(value, dt.datetime):
+        return value.time()
+
+    if isinstance(value, dt.time):
+        return value
+
+    s = str(value).strip()
+
+    if s.lower() in {"", "nan", "none", "nat", "-", "0:00:00"}:
+        return None
+
+    # Excel có thể trả 07:30 hoặc 07:30:00
+    parsed = pd.to_datetime(s, errors="coerce")
+    if pd.isna(parsed):
+        return None
+
+    return parsed.time()
+
+
+def combine_date_time(date_value, time_value) -> pd.Timestamp:
+    t = parse_time_value(time_value)
+    if t is None:
+        return pd.NaT
+
+    if isinstance(date_value, dt.datetime):
+        d = date_value.date()
+    elif isinstance(date_value, dt.date):
+        d = date_value
+    else:
+        d = pd.to_datetime(date_value, errors="coerce")
+        if pd.isna(d):
+            return pd.NaT
+        d = d.date()
+
+    return pd.Timestamp(dt.datetime.combine(d, t))
+
+
+# ============================================================
+# 5. NHẬN DIỆN CỘT
+# ============================================================
+
+SYNONYMS = {
+    "employee_id": [
+        "mã nhân viên", "ma nhan vien", "mã nv", "ma nv",
+        "mã công nhân", "ma cong nhan", "employee id", "employee",
+        "staff id", "id", "mã", "ma", "card", "thẻ", "the"
+    ],
+    "name": [
+        "họ và tên", "ho va ten", "họ tên", "ho ten",
+        "tên nhân viên", "ten nhan vien", "name", "employee name",
+        "nhân viên", "nhan vien"
+    ],
+    "datetime": [
+        "thời gian", "thoi gian", "datetime", "date time",
+        "timestamp", "ngày giờ", "ngay gio", "thời điểm",
+        "thoi diem", "time"
+    ],
+    "date": [
+        "ngày", "ngay", "date", "ngày chấm công", "ngay cham cong"
+    ],
+    "time": [
+        "giờ", "gio", "time", "thời gian", "thoi gian"
+    ],
+    "shift": [
+        "ca", "shift", "lịch", "lich", "xếp ca", "xep ca", "schedule"
+    ],
+}
+
+
+def local_column_mapping(columns: List[str], concept: str) -> Optional[str]:
+    """Ưu tiên fuzzy đơn giản trước khi gọi Gemini."""
+    cols = [str(c).strip() for c in columns]
+    normalized = {c: re.sub(r"[^a-z0-9à-ỹ ]", " ", c.lower()) for c in cols}
+
+    for c, n in normalized.items():
+        for syn in SYNONYMS.get(concept, []):
+            if syn in n:
+                return c
+
+    return None
+
+
+def gemini_column_mapping(
+    columns: List[str],
+    target_concept: str,
+    client=None,
+) -> Optional[str]:
+    """Gemini chỉ nhận danh sách cột, không gửi toàn bộ dữ liệu nhân viên."""
+    if client is None or not columns:
+        return None
+
     prompt = f"""
-    Bạn là một chuyên gia chuẩn hóa dữ liệu. Tôi có danh sách các tiêu đề cột quét từ file Excel như sau: {columns_list}
-    Hãy tìm ra tên cột khớp nhất với khái niệm: '{target_concept}'.
-    Yêu cầu bắt buộc: Chỉ trả về duy nhất tên cột chính xác tuyệt đối lấy từ danh sách trên, không kèm giải thích, không dấu câu. Nếu hoàn toàn không thấy khái niệm tương đương, trả về 'NONE'.
-    """
+Danh sách tên cột Excel:
+{columns}
+
+Khái niệm cần tìm:
+{target_concept}
+
+Chỉ trả về đúng MỘT tên cột lấy nguyên văn từ danh sách.
+Nếu không có, trả về NONE.
+Không giải thích.
+"""
+
     try:
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model="gemini-2.5-flash",
             contents=prompt,
         )
-        return response.text.strip()
-    except:
-        return "NONE"
+        answer = response.text.strip().strip("`").strip()
 
-# ==========================================
-# 2. KHÔNG GIAN TẢI FILE DỮ LIỆU ĐẦU VÀO
-# ==========================================
-st.header(l["upload_section"])
-col1, col2 = st.columns(2)
-col3, col4 = st.columns(2)
+        for c in columns:
+            if answer.lower() == str(c).strip().lower():
+                return c
 
-with col1:
-    f_finger = st.file_uploader(l["file_finger"], type=["xlsx", "xls"])
-with col2:
-    f_schedule = st.file_uploader(l["file_schedule"], type=["xlsx", "xls"])
-with col3:
-    f_vp = st.file_uploader(l["file_vp"], type=["xlsx", "xls"])
-with col4:
-    f_cn = st.file_uploader(l["file_cn"], type=["xlsx", "xls"])
+        return None
+    except Exception:
+        return None
 
-# ==========================================
-# 3. BỘ LỌC THỜI GIAN THEO YÊU CẦU NGƯỜI DÙNG
-# ==========================================
-st.header(l["filter_section"])
-target_date = st.date_input(l["select_date"], datetime.date(2026, 9, 6))
 
-# Tải cấu trúc tĩnh để tránh lỗi xử lý trống
-final_report = pd.DataFrame()
+def map_column(
+    df: pd.DataFrame,
+    concept: str,
+    client=None,
+) -> Optional[str]:
+    local = local_column_mapping(list(df.columns), concept)
+    if local:
+        return local
 
-if f_finger and f_schedule and f_vp and f_cn:
-    if st.button(l["analyze_btn"], type="primary"):
-        with st.spinner("Hệ thống kiểm toán dữ liệu đang quét tự động cấu trúc văn bản..."):
-            
-            # Đọc toàn bộ dữ liệu thô
-            df_finger = pd.read_excel(f_finger)
-            df_sched = pd.read_excel(f_schedule)
-            df_master_vp = pd.read_excel(f_vp)
-            df_master_cn = pd.read_excel(f_cn)
-            
-            # --- Hệ thống tự dịch và tìm ánh xạ cột bằng mô hình Trí Tuệ Điện Tử ---
-            id_col_finger = dynamic_column_mapping(list(df_finger.columns), "mã số nhân viên hoặc số thẻ")
-            time_col_finger = dynamic_column_mapping(list(df_finger.columns), "thời gian bấm giờ vào ra hoặc ngày giờ quét vân tay")
-            
-            # KIỂM TRA AN TOÀN: Đảm bảo cột tồn tại, nếu không cho phép chọn thủ công để tránh KeyError
-            if time_col_finger not in df_finger.columns or time_col_finger == "NONE":
-                st.warning("⚠️ Không thể tự động nhận diện cột thời gian. Vui lòng chọn cột chứa Thời gian/Ngày giờ quét vân tay:")
-                time_col_finger = st.selectbox("Chọn cột thời gian (File vân tay):", df_finger.columns, key="sel_time_finger")
+    return gemini_column_mapping(list(df.columns), concept, client)
 
-            if id_col_finger not in df_finger.columns or id_col_finger == "NONE":
-                st.warning("⚠️ Không thể tự động nhận diện cột mã nhân viên. Vui lòng chọn cột chứa Mã nhân viên:")
-                id_col_finger = st.selectbox("Chọn cột Mã nhân viên (File vân tay):", df_finger.columns, key="sel_id_finger")
-            
-            id_col_vp = dynamic_column_mapping(list(df_master_vp.columns), "mã nhân viên hoặc số thẻ văn phòng")
-            name_col_vp = dynamic_column_mapping(list(df_master_vp.columns), "họ và tên nhân viên văn phòng")
-            
-            id_col_cn = dynamic_column_mapping(list(df_master_cn.columns), "mã công nhân hoặc số thẻ nhà máy")
-            name_col_cn = dynamic_column_mapping(list(df_master_cn.columns), "họ và tên công nhân")
-            
-            # Đồng bộ dữ liệu ngày tháng của file vân tay về chuẩn datetime
-            df_finger['Standard_DateTime'] = pd.to_datetime(df_finger[time_col_finger], errors='coerce')
-            df_finger['Standard_Date'] = df_finger['Standard_DateTime'].dt.date
-            
-            # Lọc dữ liệu vân tay đúng ngày người dùng chọn trên dashboard
-            df_finger_today = df_finger[df_finger['Standard_Date'] == target_date]
-            
-            rows_output = []
-            
-            # ==========================================
-            # LOGIC XỬ LÝ KHỐI 1: NHÂN VIÊN VĂN PHÒNG (VP)
-            # ==========================================
-            for _, row in df_master_vp.iterrows():
-                eid = str(row[id_col_vp]).strip()
-                name = str(row[name_col_vp]).strip()
-                
-                # Lấy dữ liệu quẹt thẻ của nhân viên này trong ngày
-                emp_logs = df_finger_today[df_finger_today[id_col_finger].astype(str).str.strip() == eid].sort_values(by='Standard_DateTime')
-                
-                # Quy tắc riêng biệt cho mã đặc thù
-                if eid == "575":
-                    std_in, std_out, expected_hours = "07:00:00", "15:00:00", 12.0
-                elif eid in ["749", "949"]:
-                    std_in, std_out, expected_hours = "07:00:00", "19:00:00", 12.0
-                else:
-                    std_in, std_out, expected_hours = "08:00:00", "17:00:00", 8.0
-                
-                # Mặc định Chủ Nhật của Khối VP là ngày nghỉ tuần
-                if target_date.weekday() == 6:
-                    rows_output.append({
-                        l["col_eid"]: eid, l["col_name"]: name,
-                        l["col_in"]: "-", l["col_out"]: "-",
-                        l["col_hours"]: 0, l["col_note"]: "Nghỉ tuần" if st.session_state.lang=="vi" else "周休"
-                    })
-                    continue
-                
-                if emp_logs.empty:
-                    rows_output.append({
-                        l["col_eid"]: eid, l["col_name"]: name,
-                        l["col_in"]: "-", l["col_out"]: "-",
-                        l["col_hours"]: 0, l["col_note"]: "Vắng" if st.session_state.lang=="vi" else "旷工"
-                    })
-                else:
-                    t_in = emp_logs['Standard_DateTime'].min()
-                    t_out = emp_logs['Standard_DateTime'].max() if len(emp_logs) > 1 else pd.NaT
-                    
-                    in_str = t_in.strftime("%H:%M") if not pd.isna(t_in) else "-"
-                    out_str = t_out.strftime("%H:%M") if not pd.isna(t_out) else "-"
-                    
-                    notes = []
-                    actual_hours = 0.0
-                    if not pd.isna(t_in) and not pd.isna(t_out):
-                        actual_hours = round((t_out - t_in).total_seconds() / 3600, 1)
-                        
-                        limit_in = datetime.datetime.combine(target_date, datetime.time.fromisoformat(std_in))
-                        limit_out = datetime.datetime.combine(target_date, datetime.time.fromisoformat(std_out))
-                        
-                        if t_in > limit_in + datetime.timedelta(minutes=5):
-                            notes.append("Đi trễ" if st.session_state.lang=="vi" else "迟到")
-                        if t_out < limit_out:
-                            notes.append("Về sớm" if st.session_state.lang=="vi" else "早退")
-                        if actual_hours < expected_hours and "Về sớm" not in notes:
-                            notes.append(f"Về sớm ({actual_hours}h)")
-                    else:
-                        if pd.isna(t_in): notes.append("BV")
-                        if pd.isna(t_out): notes.append("BR")
-                        
-                    note_str = ", ".join(notes) if notes else ("Đủ công" if st.session_state.lang=="vi" else "全勤")
-                    rows_output.append({
-                        l["col_eid"]: eid, l["col_name"]: name,
-                        l["col_in"]: in_str, l["col_out"]: out_str,
-                        l["col_hours"]: actual_hours, l["col_note"]: note_str
-                    })
 
-            # ==========================================
-            # LOGIC XỬ LÝ KHỐI 2: CÔNG NHÂN (THEO LỊCH XẾP CA)
-            # ==========================================
-            id_col_sched = dynamic_column_mapping(list(df_sched.columns), "mã nhân viên hoặc mã số công nhân trong bảng lịch ca")
-            day_str_target = str(target_date.day) 
-            
-            sched_day_col = [c for c in df_sched.columns if str(c).strip() == day_str_target]
-            if sched_day_col:
-                target_day_col_name = sched_day_col[0]
-                
-                for _, row in df_master_cn.iterrows():
-                    eid = str(row[id_col_cn]).strip()
-                    name = str(row[name_col_cn]).strip()
-                    
-                    sched_row = df_sched[df_sched[id_col_sched].astype(str).str.strip() == eid]
-                    shift_type = "OFF"
-                    
-                    if not sched_row.empty:
-                        shift_type = str(sched_row[target_day_col_name].values[0]).strip()
-                        
-                    if shift_type in ["OFF", "nan", "-"]:
-                        rows_output.append({
-                           l["col_eid"]: eid, l["col_name"]: name,
-                           l["col_in"]: "-", l["col_out"]: "-",
-                           l["col_hours"]: 0, l["col_note"]: "Nghỉ ca" if st.session_state.lang=="vi" else "轮休"
-                        })
-                        continue
-                        
-                    emp_logs = df_finger_today[df_finger_today[id_col_finger].astype(str).str.strip() == eid].sort_values(by='Standard_DateTime')
-                    
-                    if shift_type == "N": 
-                        if emp_logs.empty:
-                            rows_output.append({
-                                __import__('builtins').dict(l)["col_eid"]: eid, l["col_name"]: name,
-                                l["col_in"]: "-", l["col_out"]: "-",
-                                l["col_hours"]: 0, l["col_note"]: "Vắng" if st.session_state.lang=="vi" else "旷工"
-                            })
-                        else:
-                            t_in = emp_logs['Standard_DateTime'].min()
-                            t_out = emp_logs['Standard_DateTime'].max() if len(emp_logs) > 1 else pd.NaT
-                            actual_hours = round((t_out - t_in).total_seconds() / 3600, 1) if not pd.isna(t_out) else 0
-                            
-                            notes = []
-                            if t_in.time() > datetime.time(7, 10): 
-                                notes.append("Đi trễ" if st.session_state.lang=="vi" else "迟到")
-                            if pd.isna(t_out) or t_out.time() < datetime.time(19, 0):
-                                notes.append("Làm không đúng lịch" if st.session_state.lang=="vi" else "未按排班出勤")
-                                
-                            note_str = ", ".join(notes) if notes else "N"
-                            rows_output.append({
-                                l["col_eid"]: eid, l["col_name"]: name,
-                                l["col_in"]: t_in.strftime("%H:%M"),
-                                l["col_out"]: t_out.strftime("%H:%M") if not pd.isna(t_out) else "-",
-                                l["col_hours"]: actual_hours, l["col_note"]: note_str
-                            })
-                            
-                    elif shift_type == "Đ": 
-                        t_in = emp_logs[emp_logs['Standard_DateTime'].dt.time >= datetime.time(18, 0)]['Standard_DateTime'].min()
-                        
-                        next_day = target_date + datetime.timedelta(days=1)
-                        df_finger_next = df_finger[df_finger['Standard_Date'] == next_day]
-                        emp_logs_next = df_finger_next[df_finger_next[id_col_finger].astype(str).str.strip() == eid].sort_values(by='Standard_DateTime')
-                        
-                        t_out = emp_logs_next[emp_logs_next['Standard_DateTime'].dt.time <= datetime.time(8, 0)]['Standard_DateTime'].max()
-                        notes = []
-                        
-                        if pd.isna(t_in) and pd.isna(t_out):
-                            rows_output.append({
-                                l["col_eid"]: eid, l["col_name"]: name,
-                                l["col_in"]: "-", l["col_out"]: "-",
-                                l["col_hours"]: 0, l["col_note"]: "Vắng" if st.session_state.lang=="vi" else "旷工"
-                            })
-                        else:
-                            actual_hours = round((t_out - t_in).total_seconds() / 3600, 1) if not pd.isna(t_in) and not pd.isna(t_out) else 0
-                            
-                            if not pd.isna(t_in) and t_in.time() > datetime.time(19, 10):
-                                notes.append("Đi trễ" if st.session_state.lang=="vi" else "迟到")
-                            if pd.isna(t_out) or t_out.time() < datetime.time(7, 0):
-                                notes.append("Làm không đúng lịch" if st.session_state.lang=="vi" else "未按排班出勤")
-                                
-                            note_str = ", ".join(notes) if notes else "Đ"
-                            rows_output.append({
-                                l["col_eid"]: eid, l["col_name"]: name,
-                                l["col_in"]: t_in.strftime("%H:%M") if not pd.isna(t_in) else "-",
-                                l["col_out"]: t_out.strftime("%H:%M") if not pd.isna(t_out) else "-",
-                                l["col_hours"]: actual_hours, l["col_note"]: note_str
-                            })
-                            
-            final_report = pd.DataFrame(rows_output)
-            st.session_state.final_report = final_report
+# ============================================================
+# 6. CHUẨN HÓA FILE VÂN TAY
+# ============================================================
 
-# ==========================================
-# 4. HIỂN THỊ KẾT QUẢ ĐỐI CHIẾU DỮ LIỆU
-# ==========================================
-if "final_report" in st.session_state and not st.session_state.final_report.empty:
-    df_res = st.session_state.final_report
-    
-    # 4.1 Bảng Chỉ Số Đo Lường (Metrics)
-    st.header(l["dashboard_stat"])
-    
-    m_total = len(df_res)
-    m_absent = len(df_res[df_res[l["col_note"]].str.contains("Vắng|旷工", na=False)])
-    m_abnormal = len(df_res[df_res[l["col_note"]].str.contains("Đi trễ|Về sớm|lịch|迟到|早退|未按", na=False)])
-    m_present = m_total - m_absent - m_abnormal
-    
-    mx1, mx2, mx3, mx4 = st.columns(4)
-    mx1.metric(l["total_staff"], m_total)
-    mx2.metric(l["total_present"], m_present)
-    mx3.metric(l["total_abnormal"], m_abnormal, delta_color="inverse")
-    mx4.metric(l["total_absent"], m_absent, delta_color="inverse")
-    
-    # 4.2 Đồ Thị Trực Quan Hóa Chuyên Nghiệp
-    g1, g2 = st.columns([1, 1])
-    with g1:
-        fig_pie = px.pie(
-            names=[l["total_present"], l["total_abnormal"], l["total_absent"]],
-            values=[m_present, m_abnormal, m_absent],
-            color_discrete_sequence=px.colors.qualitative.Pastel,
-            title="Tỷ lệ trạng thái chấm công / 出勤状态分布图"
+def prepare_fingerprint(
+    df: pd.DataFrame,
+    client=None,
+) -> Tuple[pd.DataFrame, Dict[str, Optional[str]]]:
+
+    df = df.copy()
+    df.columns = [normalize_col_name(c) for c in df.columns]
+
+    id_col = map_column(df, "employee_id", client)
+    datetime_col = map_column(df, "datetime", client)
+
+    # Nếu không có datetime duy nhất, tìm date + time
+    date_col = map_column(df, "date", client)
+    time_col = map_column(df, "time", client)
+
+    if not id_col:
+        raise ValueError("Không tìm thấy cột Mã nhân viên/thẻ trong file vân tay.")
+
+    if not datetime_col and not (date_col and time_col):
+        raise ValueError(
+            "Không tìm thấy cột ngày giờ hoặc cặp cột ngày + giờ trong file vân tay."
         )
-        st.plotly_chart(fig_pie, use_container_width=True)
-        
-    with g2:
-        fig_bar = px.bar(
-            df_res, x=l["col_name"],
-            y=l["col_hours"], # Đã sửa từ col_name sang col_hours (giá trị số thực tế)
-            color=l["col_note"],
-            title="Phân bố chi tiết theo từng cá nhân / 个人考勤具体分布"
-        )
-        st.plotly_chart(fig_bar, use_container_width=True)
-        
-    # 4.3 Trọng Tâm Các Trường Hợp Bất Thường
-    st.header(l["abnormal_focus"])
-    df_bad = df_res[df_res[l["col_note"]].str.contains("Vắng|Đi trễ|Về sớm|lịch|旷工|迟到|早退|未按", na=False)]
-    
-    if not df_bad.empty:
-        summary_prompt = f"""
-        Dựa trên bảng danh sách nhân sự lỗi chấm công sau đây, hãy viết một báo cáo tóm tắt trọng tâm siêu ngắn gọn (dưới 5 dòng), chỉ rõ các mã nhân viên vi phạm nghiêm trọng (Vắng, Đi trễ hoặc sai ca). Không viết dài dòng.
-        Danh sách dữ liệu lỗi:
-        {df_bad[[l["col_eid"], l["col_name"], l["col_note"]]].to_string(index=False)}
-        Language response requirement: Trả về kết quả song ngữ Trung-Việt tương ứng. Tuyệt đối không dùng chữ 'AI' trong câu trả lời.
-        """
-        summary_response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=summary_prompt,
-        )
-        st.warning(summary_response.text)
+
+    out = df.copy()
+    out["_EmployeeID"] = out[id_col].apply(normalize_id)
+
+    if datetime_col:
+        out["_DateTime"] = out[datetime_col].apply(parse_datetime_value)
     else:
-        st.success("Không có trường hợp bất thường nào trong ngày! / 今日无异常考勤记录。")
-        
-    # 4.4 Bảng Dữ Liệu Chi Tiết Giao Diện Người Dùng
-    st.dataframe(df_res, use_container_width=True)
+        out["_DateTime"] = [
+            combine_date_time(d, t)
+            for d, t in zip(out[date_col], out[time_col])
+        ]
 
-# ==========================================
-# 5. XUẤT FILE BÁO CÁO (EXCEL / PDF TRỰC TIẾP)
-# ==========================================
-st.header(l["export_section"])
+    out["_Date"] = out["_DateTime"].dt.date
 
-buffer_excel = io.BytesIO()
-with pd.ExcelWriter(buffer_excel, engine='xlsxwriter') as writer:
-    if not final_report.empty:
-        final_report.to_excel(writer, index=False, sheet_name='ThongKe_Attendance')
+    mapping = {
+        "employee_id": id_col,
+        "datetime": datetime_col,
+        "date": date_col,
+        "time": time_col,
+    }
 
-c_down1, c_down2 = st.columns(2)
-with c_down1:
-    st.download_button(
-        label=l["download_excel"],
-        data=buffer_excel.getvalue(),
-        file_name=f"Attendance_Report_{target_date}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    return out, mapping
+
+
+# ============================================================
+# 7. CHUẨN HÓA MASTER
+# ============================================================
+
+def prepare_master(
+    df: pd.DataFrame,
+    kind: str,
+    client=None,
+) -> Tuple[pd.DataFrame, Dict[str, Optional[str]]]:
+
+    df = df.copy()
+    df.columns = [normalize_col_name(c) for c in df.columns]
+
+    id_col = map_column(df, "employee_id", client)
+    name_col = map_column(df, "name", client)
+
+    if not id_col:
+        raise ValueError(f"Không tìm thấy cột mã nhân viên trong danh sách {kind}.")
+    if not name_col:
+        raise ValueError(f"Không tìm thấy cột họ tên trong danh sách {kind}.")
+
+    out = df.copy()
+    out["_EmployeeID"] = out[id_col].apply(normalize_id)
+    out["_Name"] = out[name_col].apply(clean_name)
+
+    return out, {
+        "employee_id": id_col,
+        "name": name_col,
+    }
+
+
+# ============================================================
+# 8. CHUẨN HÓA LỊCH CA
+# ============================================================
+
+def prepare_schedule(df: pd.DataFrame, client=None):
+    df = df.copy()
+    df.columns = [normalize_col_name(c) for c in df.columns]
+
+    id_col = map_column(df, "employee_id", client)
+    if not id_col:
+        raise ValueError("Không tìm thấy cột mã nhân viên trong lịch ca.")
+
+    out = df.copy()
+    out["_EmployeeID"] = out[id_col].apply(normalize_id)
+
+    return out, {"employee_id": id_col}
+
+
+def get_schedule_shift(schedule_df, employee_id: str, target_date: dt.date):
+    """Hỗ trợ dạng cột ngày = 1,2,3... hoặc ngày thực tế."""
+    if schedule_df is None or schedule_df.empty:
+        return "OFF"
+
+    rows = schedule_df[schedule_df["_EmployeeID"] == employee_id]
+    if rows.empty:
+        return "OFF"
+
+    row = rows.iloc[0]
+
+    # 1) cột đúng số ngày trong tháng
+    candidates = [
+        str(target_date.day),
+        f"{target_date.day:02d}",
+    ]
+
+    # 2) cột ngày dạng dd/mm/yyyy, yyyy-mm-dd...
+    candidates += [
+        target_date.strftime("%d/%m/%Y"),
+        target_date.strftime("%Y-%m-%d"),
+        target_date.strftime("%d-%m-%Y"),
+    ]
+
+    for c in candidates:
+        if c in schedule_df.columns:
+            value = row[c]
+            if pd.isna(value):
+                return "OFF"
+            return str(value).strip()
+
+    return "OFF"
+
+
+def normalize_shift(value: str) -> str:
+    s = str(value).strip().upper()
+
+    mapping = {
+        "N": "N",
+        "CA NGÀY": "N",
+        "CA NGAY": "N",
+        "DAY": "N",
+        "D": "D",
+        "Đ": "D",
+        "CA ĐÊM": "D",
+        "CA DEM": "D",
+        "NIGHT": "D",
+        "OFF": "OFF",
+        "NGHỈ": "OFF",
+        "NGHI": "OFF",
+        "-": "OFF",
+        "NAN": "OFF",
+    }
+
+    return mapping.get(s, s)
+
+
+# ============================================================
+# 9. ENGINE CHẤM CÔNG
+# ============================================================
+
+def fmt_time(ts) -> str:
+    if ts is None or pd.isna(ts):
+        return "-"
+    return pd.Timestamp(ts).strftime("%H:%M")
+
+
+def hours_between(t_in, t_out) -> float:
+    if t_in is None or t_out is None or pd.isna(t_in) or pd.isna(t_out):
+        return 0.0
+
+    sec = (pd.Timestamp(t_out) - pd.Timestamp(t_in)).total_seconds()
+
+    # nếu dữ liệu có tình huống qua ngày
+    if sec < 0:
+        sec += 24 * 3600
+
+    return round(sec / 3600, 2)
+
+
+def get_first_last(logs: pd.DataFrame):
+    if logs.empty:
+        return None, None
+
+    logs = logs.sort_values("_DateTime")
+    t_in = logs["_DateTime"].iloc[0]
+    t_out = logs["_DateTime"].iloc[-1] if len(logs) >= 2 else None
+    return t_in, t_out
+
+
+def evaluate_pair(
+    t_in,
+    t_out,
+    expected_in: dt.time,
+    expected_out: dt.time,
+    expected_hours: float,
+    target_date: dt.date,
+    grace_minutes: int,
+):
+    status_codes = []
+    notes = []
+
+    if t_in is None or pd.isna(t_in):
+        status_codes.append("MISSING_IN")
+        notes.append("BV")
+    if t_out is None or pd.isna(t_out):
+        status_codes.append("MISSING_OUT")
+        notes.append("BR")
+
+    if t_in is None or pd.isna(t_in):
+        if t_out is None or pd.isna(t_out):
+            status_codes = ["ABSENT"]
+            notes = ["Vắng"]
+        return 0.0, status_codes, notes
+
+    actual_hours = hours_between(t_in, t_out)
+
+    limit_in = pd.Timestamp(dt.datetime.combine(target_date, expected_in))
+    limit_out = pd.Timestamp(dt.datetime.combine(target_date, expected_out))
+
+    # Cho phép giờ ra nằm ngày sau nếu cần
+    if pd.Timestamp(t_out) < pd.Timestamp(t_in):
+        limit_out += pd.Timedelta(days=1)
+
+    if pd.Timestamp(t_in) > limit_in + pd.Timedelta(minutes=grace_minutes):
+        status_codes.append("LATE")
+        notes.append("Đi trễ")
+
+    if t_out is not None and not pd.isna(t_out):
+        if pd.Timestamp(t_out) < limit_out:
+            status_codes.append("EARLY")
+            notes.append("Về sớm")
+
+    if (
+        t_out is not None
+        and not pd.isna(t_out)
+        and expected_hours > 0
+        and actual_hours + 1e-9 < expected_hours
+        and "EARLY" not in status_codes
+    ):
+        status_codes.append("SHORT_HOURS")
+        notes.append(f"Thiếu giờ ({actual_hours}h)")
+
+    if not status_codes:
+        status_codes = ["NORMAL"]
+        notes = ["Đủ công"]
+
+    return actual_hours, status_codes, notes
+
+
+def process_vp(
+    master_vp,
+    finger,
+    target_date,
+    special_rules,
+    grace_minutes,
+):
+    rows = []
+
+    for _, emp in master_vp.iterrows():
+        eid = emp["_EmployeeID"]
+        name = emp["_Name"]
+
+        logs = finger[
+            (finger["_EmployeeID"] == eid)
+            & (finger["_Date"] == target_date)
+        ].sort_values("_DateTime")
+
+        # Chủ nhật nghỉ VP
+        if target_date.weekday() == 6:
+            rows.append({
+                "Mã NV": eid,
+                "Họ và Tên": name,
+                "Khối": "VP",
+                "Ca": "OFF",
+                "Giờ vào": "-",
+                "Giờ ra": "-",
+                "Giờ làm thực tế": 0.0,
+                "Status_Code": "OFF",
+                "Ghi chú": "Nghỉ tuần",
+            })
+            continue
+
+        if eid == "575":
+            in_s, out_s, expected_h = special_rules["575"]
+        elif eid in {"749", "949"}:
+            in_s, out_s, expected_h = special_rules["749_949"]
+        else:
+            in_s, out_s, expected_h = special_rules["DEFAULT"]
+
+        expected_in = dt.time.fromisoformat(in_s)
+        expected_out = dt.time.fromisoformat(out_s)
+
+        t_in, t_out = get_first_last(logs)
+
+        actual, codes, notes = evaluate_pair(
+            t_in,
+            t_out,
+            expected_in,
+            expected_out,
+            expected_h,
+            target_date,
+            grace_minutes,
+        )
+
+        rows.append({
+            "Mã NV": eid,
+            "Họ và Tên": name,
+            "Khối": "VP",
+            "Ca": "VP",
+            "Giờ vào": fmt_time(t_in),
+            "Giờ ra": fmt_time(t_out),
+            "Giờ làm thực tế": actual,
+            "Status_Code": "|".join(codes),
+            "Ghi chú": ", ".join(notes),
+        })
+
+    return rows
+
+
+def process_cn(
+    master_cn,
+    schedule,
+    finger,
+    target_date,
+    grace_minutes,
+):
+    rows = []
+
+    for _, emp in master_cn.iterrows():
+        eid = emp["_EmployeeID"]
+        name = emp["_Name"]
+
+        raw_shift = get_schedule_shift(schedule, eid, target_date)
+        shift = normalize_shift(raw_shift)
+
+        if shift == "OFF":
+            rows.append({
+                "Mã NV": eid,
+                "Họ và Tên": name,
+                "Khối": "CN",
+                "Ca": "OFF",
+                "Giờ vào": "-",
+                "Giờ ra": "-",
+                "Giờ làm thực tế": 0.0,
+                "Status_Code": "OFF",
+                "Ghi chú": "Nghỉ ca",
+            })
+            continue
+
+        # ==========================
+        # CA NGÀY: 07:00 -> 19:00
+        # ==========================
+        if shift == "N":
+            logs = finger[
+                (finger["_EmployeeID"] == eid)
+                & (finger["_Date"] == target_date)
+            ].sort_values("_DateTime")
+
+            t_in, t_out = get_first_last(logs)
+
+            actual, codes, notes = evaluate_pair(
+                t_in,
+                t_out,
+                dt.time(7, 0),
+                dt.time(19, 0),
+                12.0,
+                target_date,
+                grace_minutes,
+            )
+
+            rows.append({
+                "Mã NV": eid,
+                "Họ và Tên": name,
+                "Khối": "CN",
+                "Ca": "N",
+                "Giờ vào": fmt_time(t_in),
+                "Giờ ra": fmt_time(t_out),
+                "Giờ làm thực tế": actual,
+                "Status_Code": "|".join(codes),
+                "Ghi chú": ", ".join(notes),
+            })
+
+        # ==========================
+        # CA ĐÊM: 19:00 -> 07:00 hôm sau
+        # ==========================
+        elif shift == "D":
+            today_logs = finger[
+                (finger["_EmployeeID"] == eid)
+                & (finger["_Date"] == target_date)
+            ].sort_values("_DateTime")
+
+            next_date = target_date + dt.timedelta(days=1)
+
+            next_logs = finger[
+                (finger["_EmployeeID"] == eid)
+                & (finger["_Date"] == next_date)
+            ].sort_values("_DateTime")
+
+            # vào: từ 18:00 trở đi để có biên an toàn
+            in_candidates = today_logs[
+                today_logs["_DateTime"].dt.time >= dt.time(18, 0)
+            ]
+
+            # ra: ngày hôm sau trước 08:00
+            out_candidates = next_logs[
+                next_logs["_DateTime"].dt.time <= dt.time(8, 0)
+            ]
+
+            t_in = in_candidates["_DateTime"].min() if not in_candidates.empty else None
+            t_out = out_candidates["_DateTime"].max() if not out_candidates.empty else None
+
+            status_codes = []
+            notes = []
+
+            if t_in is None:
+                status_codes.append("MISSING_IN")
+                notes.append("BV")
+
+            if t_out is None:
+                status_codes.append("MISSING_OUT")
+                notes.append("BR")
+
+            if t_in is None and t_out is None:
+                status_codes = ["ABSENT"]
+                notes = ["Vắng"]
+                actual = 0.0
+            else:
+                actual = hours_between(t_in, t_out)
+
+                if t_in is not None:
+                    expected_in_dt = pd.Timestamp(
+                        dt.datetime.combine(target_date, dt.time(19, 0))
+                    )
+                    if t_in > expected_in_dt + pd.Timedelta(minutes=grace_minutes):
+                        status_codes.append("LATE")
+                        notes.append("Đi trễ")
+
+                if t_out is not None:
+                    expected_out_dt = pd.Timestamp(
+                        dt.datetime.combine(next_date, dt.time(7, 0))
+                    )
+                    if t_out < expected_out_dt:
+                        status_codes.append("EARLY")
+                        notes.append("Về sớm")
+
+                if t_in is not None and t_out is not None and not status_codes:
+                    status_codes = ["NORMAL"]
+                    notes = ["Đủ công"]
+
+            rows.append({
+                "Mã NV": eid,
+                "Họ và Tên": name,
+                "Khối": "CN",
+                "Ca": "D",
+                "Giờ vào": fmt_time(t_in),
+                "Giờ ra": fmt_time(t_out),
+                "Giờ làm thực tế": actual,
+                "Status_Code": "|".join(status_codes),
+                "Ghi chú": ", ".join(notes),
+            })
+
+        # Ca lạ -> báo lỗi thay vì tự đoán
+        else:
+            rows.append({
+                "Mã NV": eid,
+                "Họ và Tên": name,
+                "Khối": "CN",
+                "Ca": shift,
+                "Giờ vào": "-",
+                "Giờ ra": "-",
+                "Giờ làm thực tế": 0.0,
+                "Status_Code": "UNKNOWN_SHIFT",
+                "Ghi chú": f"Không nhận diện ca: {raw_shift}",
+            })
+
+    return rows
+
+
+def run_attendance_engine(
+    finger,
+    master_vp,
+    master_cn,
+    schedule,
+    target_date,
+    special_rules,
+    grace_minutes,
+):
+    vp_rows = process_vp(
+        master_vp,
+        finger,
+        target_date,
+        special_rules,
+        grace_minutes,
     )
 
-with c_down2:
-    st.button(
-        l["download_pdf"], 
-        on_click=st.js_sandbox if hasattr(st, "js_sandbox") else None, 
-        help="Nhấn Ctrl+P hoặc Cmd+P để lưu file PDF khớp giao diện Dashboard"
+    cn_rows = process_cn(
+        master_cn,
+        schedule,
+        finger,
+        target_date,
+        grace_minutes,
     )
+
+    result = pd.DataFrame(vp_rows + cn_rows)
+
+    if not result.empty:
+        result["Ngày"] = target_date.isoformat()
+
+        # thứ tự cột
+        cols = [
+            "Ngày", "Mã NV", "Họ và Tên", "Khối", "Ca",
+            "Giờ vào", "Giờ ra", "Giờ làm thực tế",
+            "Status_Code", "Ghi chú"
+        ]
+        result = result[[c for c in cols if c in result.columns]]
+
+    return result
+
+
+# ============================================================
+# 10. GEMINI - CHỈ TÓM TẮT KẾT QUẢ, KHÔNG TÍNH CHẤM CÔNG
+# ============================================================
+
+def make_gemini_client(api_key: str):
+    if genai is None:
+        return None
+
+    key = api_key.strip() if api_key else ""
+
+    if not key:
+        try:
+            key = st.secrets.get("GEMINI_API_KEY", "")
+        except Exception:
+            key = ""
+
+    if not key:
+        return None
+
+    try:
+        return genai.Client(api_key=key)
+    except Exception:
+        return None
+
+
+def gemini_summary(df_abnormal: pd.DataFrame, client) -> str:
+    if client is None or df_abnormal.empty:
+        return ""
+
+    safe = df_abnormal[
+        [
+            "Mã NV", "Họ và Tên", "Khối", "Ca",
+            "Giờ vào", "Giờ ra", "Giờ làm thực tế",
+            "Status_Code", "Ghi chú"
+        ]
+    ].copy()
+
+    prompt = f"""
+Bạn là trợ lý lập báo cáo chấm công.
+
+Kết quả dưới đây ĐÃ được hệ thống Python tính toán.
+Bạn KHÔNG được thay đổi, suy diễn hoặc sửa Status_Code.
+
+Hãy viết tối đa 5 dòng tóm tắt:
+- Có bao nhiêu trường hợp bất thường.
+- Nhóm lỗi nổi bật.
+- Nếu có, nêu các mã nhân viên cần chú ý nhất.
+- Viết song ngữ Việt - Trung.
+- Không dùng bảng.
+- Không nói về cách hệ thống tính toán.
+
+DỮ LIỆU:
+{safe.to_string(index=False)}
+"""
+
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
+            return response.text.strip()
+        except Exception as e:
+            if "503" in str(e) and attempt < 2:
+                time.sleep(2)
+                continue
+            return ""
+
+    return ""
+
+
+# ============================================================
+# 11. DASHBOARD
+# ============================================================
+
+st.header(L["upload"])
+
+c1, c2 = st.columns(2)
+c3, c4 = st.columns(2)
+
+with c1:
+    f_finger = st.file_uploader(
+        L["finger"],
+        type=["xlsx", "xls", "csv"],
+        key="finger",
+    )
+
+with c2:
+    f_schedule = st.file_uploader(
+        L["schedule"],
+        type=["xlsx", "xls", "csv"],
+        key="schedule",
+    )
+
+with c3:
+    f_vp = st.file_uploader(
+        L["vp"],
+        type=["xlsx", "xls", "csv"],
+        key="vp",
+    )
+
+with c4:
+    f_cn = st.file_uploader(
+        L["cn"],
+        type=["xlsx", "xls", "csv"],
+        key="cn",
+    )
+
+
+# ============================================================
+# 12. LOAD FILE
+# ============================================================
+
+df_finger_raw = load_smart_excel(f_finger)
+df_schedule_raw = load_smart_excel(f_schedule)
+df_vp_raw = load_smart_excel(f_vp)
+df_cn_raw = load_smart_excel(f_cn)
+
+finger_prepared = None
+schedule_prepared = None
+vp_prepared = None
+cn_prepared = None
+
+mapping_info = {}
+
+
+if df_finger_raw is not None:
+    try:
+        temp_client = make_gemini_client(gemini_key)
+        finger_prepared, mapping_info["fingerprint"] = prepare_fingerprint(
+            df_finger_raw,
+            temp_client,
+        )
+    except Exception as e:
+        st.error(f"File vân tay: {e}")
+
+
+if df_schedule_raw is not None:
+    try:
+        temp_client = make_gemini_client(gemini_key)
+        schedule_prepared, mapping_info["schedule"] = prepare_schedule(
+            df_schedule_raw,
+            temp_client,
+        )
+    except Exception as e:
+        st.error(f"File lịch ca: {e}")
+
+
+if df_vp_raw is not None:
+    try:
+        temp_client = make_gemini_client(gemini_key)
+        vp_prepared, mapping_info["vp"] = prepare_master(
+            df_vp_raw,
+            "VP",
+            temp_client,
+        )
+    except Exception as e:
+        st.error(f"File VP: {e}")
+
+
+if df_cn_raw is not None:
+    try:
+        temp_client = make_gemini_client(gemini_key)
+        cn_prepared, mapping_info["cn"] = prepare_master(
+            df_cn_raw,
+            "CN",
+            temp_client,
+        )
+    except Exception as e:
+        st.error(f"File CN: {e}")
+
+
+# ============================================================
+# 13. CHỌN NGÀY
+# ============================================================
+
+st.header(L["date"])
+
+available_dates = []
+
+if finger_prepared is not None and not finger_prepared.empty:
+    available_dates = sorted(
+        d for d in finger_prepared["_Date"].dropna().unique()
+    )
+
+if available_dates:
+    default_index = len(available_dates) - 1
+    target_date = st.selectbox(
+        "Ngày / 日期",
+        available_dates,
+        index=default_index,
+        format_func=lambda x: x.strftime("%d/%m/%Y"),
+    )
+else:
+    target_date = st.date_input(
+        "Ngày / 日期",
+        value=dt.date.today(),
+    )
+
+
+# ============================================================
+# 14. CHẠY ENGINE
+# ============================================================
+
+all_ready = all([
+    finger_prepared is not None,
+    vp_prepared is not None,
+    cn_prepared is not None,
+    schedule_prepared is not None,
+])
+
+if not all_ready:
+    st.info(
+        "Vui lòng tải đủ 4 file: vân tay + lịch ca + VP + CN."
+    )
+
+if st.button(L["run"], type="primary", disabled=not all_ready):
+
+    special_rules = {
+        "DEFAULT": (
+            vp_default_in.strip() + (":00" if len(vp_default_in.strip().split(":")) == 2 else ""),
+            vp_default_out.strip() + (":00" if len(vp_default_out.strip().split(":")) == 2 else ""),
+            8.0,
+        ),
+        "575": (
+            special_575_in.strip() + (":00" if len(special_575_in.strip().split(":")) == 2 else ""),
+            special_575_out.strip() + (":00" if len(special_575_out.strip().split(":")) == 2 else ""),
+            float(special_575_expected),
+        ),
+        "749_949": (
+            special_749_in.strip() + (":00" if len(special_749_in.strip().split(":")) == 2 else ""),
+            special_749_out.strip() + (":00" if len(special_749_out.strip().split(":")) == 2 else ""),
+            float(special_749_expected),
+        ),
+    }
+
+    with st.spinner("Đang đối chiếu dữ liệu bằng Python..."):
+        try:
+            result = run_attendance_engine(
+                finger_prepared,
+                vp_prepared,
+                cn_prepared,
+                schedule_prepared,
+                target_date,
+                special_rules,
+                int(late_grace),
+            )
+
+            st.session_state["final_report"] = result
+            st.session_state["result_date"] = target_date
+
+            # Gemini chỉ tóm tắt phần bất thường
+            client = make_gemini_client(gemini_key)
+
+            abnormal_mask = ~result["Status_Code"].isin(["NORMAL", "OFF"])
+            df_abnormal = result[abnormal_mask].copy()
+
+            summary = gemini_summary(df_abnormal, client)
+            st.session_state["gemini_summary"] = summary
+
+            st.success("✅ Đối chiếu hoàn tất.")
+
+        except Exception as e:
+            st.error(f"Lỗi xử lý: {e}")
+
+
+# ============================================================
+# 15. HIỂN THỊ KẾT QUẢ
+# ============================================================
+
+if "final_report" in st.session_state:
+    result = st.session_state["final_report"].copy()
+
+    if not result.empty:
+        st.header(L["dashboard"])
+
+        total = len(result)
+        normal = int((result["Status_Code"] == "NORMAL").sum())
+        absent = int(result["Status_Code"].str.contains("ABSENT", na=False).sum())
+        off = int((result["Status_Code"] == "OFF").sum())
+        abnormal = total - normal - off
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric(L["total"], total)
+        m2.metric(L["normal"], normal)
+        m3.metric(L["abnormal_count"], abnormal)
+        m4.metric(L["absent"], absent)
+
+        chart_df = pd.DataFrame({
+            "Trạng thái": [
+                "Bình thường",
+                "Bất thường",
+                "Vắng",
+                "Nghỉ",
+            ],
+            "Số lượng": [
+                normal,
+                abnormal,
+                absent,
+                off,
+            ],
+        })
+
+        fig = px.pie(
+            chart_df,
+            names="Trạng thái",
+            values="Số lượng",
+            hole=0.45,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # -------------------------------
+        # Bất thường
+        # -------------------------------
+        st.header(L["abnormal"])
+
+        abnormal_df = result[
+            ~result["Status_Code"].isin(["NORMAL", "OFF"])
+        ].copy()
+
+        if abnormal_df.empty:
+            st.success(L["no_abnormal"])
+        else:
+            st.dataframe(
+                abnormal_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            summary = st.session_state.get("gemini_summary", "")
+            if summary:
+                st.info(summary)
+
+        # -------------------------------
+        # Toàn bộ kết quả
+        # -------------------------------
+        with st.expander(L["engine"]):
+            st.dataframe(
+                result,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        # -------------------------------
+        # Mapping
+        # -------------------------------
+        with st.expander(L["mapping"]):
+            for source, mapping in mapping_info.items():
+                st.markdown(f"**{source}**")
+                st.json(mapping)
+
+        # -------------------------------
+        # Raw standardized data
+        # -------------------------------
+        with st.expander(L["show_raw"]):
+            if finger_prepared is not None:
+                st.dataframe(
+                    finger_prepared[
+                        ["_EmployeeID", "_DateTime", "_Date"]
+                    ].sort_values("_DateTime"),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        # ====================================================
+        # 16. EXCEL EXPORT
+        # ====================================================
+
+        st.header(L["export"])
+
+        output = io.BytesIO()
+
+        with pd.ExcelWriter(
+            output,
+            engine="openpyxl",
+        ) as writer:
+
+            result.to_excel(
+                writer,
+                index=False,
+                sheet_name="KetQua_ChamCong",
+            )
+
+            abnormal_df.to_excel(
+                writer,
+                index=False,
+                sheet_name="BatThuong",
+            )
+
+            # Mapping
+            mapping_rows = []
+            for source, mapping in mapping_info.items():
+                for concept, col in mapping.items():
+                    mapping_rows.append({
+                        "Nguồn": source,
+                        "Khái niệm": concept,
+                        "Cột được chọn": col or "NONE",
+                    })
+
+            pd.DataFrame(mapping_rows).to_excel(
+                writer,
+                index=False,
+                sheet_name="Mapping",
+            )
+
+            # Thống kê
+            chart_df.to_excel(
+                writer,
+                index=False,
+                sheet_name="ThongKe",
+            )
+
+        st.download_button(
+            label=L["excel"],
+            data=output.getvalue(),
+            file_name=f"Bao_Cao_Cham_Cong_{target_date}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        st.caption(
+            "PDF: dùng Ctrl+P → Save as PDF để lưu nguyên giao diện Dashboard."
+        )
+
+else:
+    st.info("Sau khi chạy đối chiếu, kết quả sẽ xuất hiện tại đây.")
+'''
+path = Path("/mnt/data/app_CODE4_cham_cong.py")
+path.write_text(code, encoding="utf-8")
+print(path)
