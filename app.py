@@ -83,7 +83,7 @@ else:
     st.error("Chưa cấu hình khóa bảo mật GEMINI_API_KEY trên Streamlit Cloud!")
     st.stop()
 
-# Hàm trung gian gửi danh sách cột qua hệ thống Trí tuệ điện tử để phân tích ngữ nghĩa tự động [1]
+# Hàm trung gian gửi danh sách cột qua hệ thống Trí tuệ điện tử để phân tích ngữ nghĩa tự động
 def dynamic_column_mapping(columns_list, target_concept):
     prompt = f"""
     Bạn là một chuyên gia chuẩn hóa dữ liệu. Tôi có danh sách các tiêu đề cột quét từ file Excel như sau: {columns_list}
@@ -134,9 +134,18 @@ if f_finger and f_schedule and f_vp and f_cn:
             df_master_vp = pd.read_excel(f_vp)
             df_master_cn = pd.read_excel(f_cn)
             
-            # --- Hệ thống tự dịch và tìm ánh xạ cột bằng mô hình Trí Tuệ Điện Tử [1] ---
+            # --- Hệ thống tự dịch và tìm ánh xạ cột bằng mô hình Trí Tuệ Điện Tử ---
             id_col_finger = dynamic_column_mapping(list(df_finger.columns), "mã số nhân viên hoặc số thẻ")
             time_col_finger = dynamic_column_mapping(list(df_finger.columns), "thời gian bấm giờ vào ra hoặc ngày giờ quét vân tay")
+            
+            # KIỂM TRA AN TOÀN: Đảm bảo cột tồn tại, nếu không cho phép chọn thủ công để tránh KeyError
+            if time_col_finger not in df_finger.columns or time_col_finger == "NONE":
+                st.warning("⚠️ Không thể tự động nhận diện cột thời gian. Vui lòng chọn cột chứa Thời gian/Ngày giờ quét vân tay:")
+                time_col_finger = st.selectbox("Chọn cột thời gian (File vân tay):", df_finger.columns, key="sel_time_finger")
+
+            if id_col_finger not in df_finger.columns or id_col_finger == "NONE":
+                st.warning("⚠️ Không thể tự động nhận diện cột mã nhân viên. Vui lòng chọn cột chứa Mã nhân viên:")
+                id_col_finger = st.selectbox("Chọn cột Mã nhân viên (File vân tay):", df_finger.columns, key="sel_id_finger")
             
             id_col_vp = dynamic_column_mapping(list(df_master_vp.columns), "mã nhân viên hoặc số thẻ văn phòng")
             name_col_vp = dynamic_column_mapping(list(df_master_vp.columns), "họ và tên nhân viên văn phòng")
@@ -240,9 +249,9 @@ if f_finger and f_schedule and f_vp and f_cn:
                         
                     if shift_type in ["OFF", "nan", "-"]:
                         rows_output.append({
-                            l["col_eid"]: eid, l["col_name"]: name,
-                            l["col_in"]: "-", l["col_out"]: "-",
-                            l["col_hours"]: 0, l["col_note"]: "Nghỉ ca" if st.session_state.lang=="vi" else "轮休"
+                           l["col_eid"]: eid, l["col_name"]: name,
+                           l["col_in"]: "-", l["col_out"]: "-",
+                           l["col_hours"]: 0, l["col_note"]: "Nghỉ ca" if st.session_state.lang=="vi" else "轮休"
                         })
                         continue
                         
@@ -251,7 +260,7 @@ if f_finger and f_schedule and f_vp and f_cn:
                     if shift_type == "N": 
                         if emp_logs.empty:
                             rows_output.append({
-                                l["col_eid"]: eid, l["col_name"]: name,
+                                __import__('builtins').dict(l)["col_eid"]: eid, l["col_name"]: name,
                                 l["col_in"]: "-", l["col_out"]: "-",
                                 l["col_hours"]: 0, l["col_note"]: "Vắng" if st.session_state.lang=="vi" else "旷工"
                             })
@@ -342,13 +351,14 @@ if "final_report" in st.session_state and not st.session_state.final_report.empt
         
     with g2:
         fig_bar = px.bar(
-            df_res, x=l["col_name"], y=l["col_name"],
+            df_res, x=l["col_name"],
+            y=l["col_hours"], # Đã sửa từ col_name sang col_hours (giá trị số thực tế)
             color=l["col_note"],
             title="Phân bố chi tiết theo từng cá nhân / 个人考勤具体分布"
         )
         st.plotly_chart(fig_bar, use_container_width=True)
         
-    # 4.3 Trọng Tâm Các Trường Hợp Bất Thường [1]
+    # 4.3 Trọng Tâm Các Trường Hợp Bất Thường
     st.header(l["abnormal_focus"])
     df_bad = df_res[df_res[l["col_note"]].str.contains("Vắng|Đi trễ|Về sớm|lịch|旷工|迟到|早退|未按", na=False)]
     
