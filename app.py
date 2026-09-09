@@ -83,10 +83,10 @@ if st.button("🚀 Chạy phân tích chấm công với Gemini AI", type="prima
                 client = genai.Client()
                 
                 # Chuyển đổi dữ liệu mẫu thành chuỗi để đưa vào Prompt cho AI
-                fp_sample = df_fp.head(50).to_string()
-                vp_sample = df_vp.head(50).to_string()
-                cn_sample = df_cn.head(50).to_string()
-                sc_sample = df_sc.head(50).to_string() if df_sc is not None else "Không có file lịch ca riêng"
+                fp_sample = df_fp.to_string() if df_fp is not None else "Không có"
+                vp_sample = df_vp.to_string() if df_vp is not None else "Không có"
+                cn_sample = df_cn.to_string() if df_cn is not None else "Không có"
+                sc_sample = df_sc.to_string() if df_sc is not None else "Không có"
 
                 prompt = f"""
                 Bạn là một AI chuyên phân tích nhân sự và chấm công tự động. 
@@ -118,7 +118,7 @@ if st.button("🚀 Chạy phân tích chấm công với Gemini AI", type="prima
                 """
 
                 response = client.models.generate_content(
-                    model='gemini-1.5-flash',
+                    model='gemini-2.5-flash',
                     contents=prompt,
                 )
                 
@@ -134,28 +134,34 @@ if 'ai_analysis_result' in st.session_state:
     st.markdown(st.session_state['ai_analysis_result'])
 
 
-# --- PHẦN 4: THỐNG KÊ BIỂU ĐỒ CHUYÊN NGHIỆP ---
+# --- PHẦN 4: THỐNG KÊ & PHÂN TÍCH BẰNG BIỂU ĐỒ (ĐỌC TỪ FILE THỰC TẾ) ---
 st.subheader("📈 4. Thống kê & Phân tích bằng Biểu đồ")
 
-# Tạo dữ liệu giả lập trực quan cho biểu đồ nếu chưa có phân tích chi tiết từ file thực tế
+# Đếm số lượng thực tế từ file người dùng tải lên
+total_vp = len(df_vp) if df_vp is not None else 0
+total_cn = len(df_cn) if df_cn is not None else 0
+total_nhan_su = total_vp + total_cn
+
+# Hiển thị các chỉ số tổng quan (Metrics)
+col_m1, col_m2, col_m3 = st.columns(3)
+col_m1.metric("Tổng số Nhân viên VP", f"{total_vp} người")
+col_m2.metric("Tổng số Công nhân (CN)", f"{total_cn} người")
+col_m3.metric("Tổng nhân sự hệ thống", f"{total_nhan_su} người")
+
 col_chart1, col_chart2 = st.columns(2)
 
 with col_chart1:
-    st.markdown("#### Tỷ lệ trạng thái đi làm trong ngày")
-    status_data = pd.DataFrame({
-        'Trạng thái': ['Đúng giờ / Đủ ca', 'Đi trễ / Về sớm', 'Vắng mặt', 'Thiếu giờ (BTV/BTR)'],
-        'Số lượng': [120, 15, 5, 8]
+    st.markdown("#### Tỷ lệ phân bố nhân sự")
+    dept_data = pd.DataFrame({
+        'Bộ phận': ['Văn Phòng', 'Công Nhân'],
+        'Số lượng': [total_vp, total_cn]
     })
-    fig_pie = px.pie(status_data, values='Số lượng', names='Trạng thái', hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
+    fig_pie = px.pie(dept_data, values='Số lượng', names='Bộ phận', hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
     st.plotly_chart(fig_pie, use_container_width=True)
 
 with col_chart2:
-    st.markdown("#### Thống kê theo bộ phận / Ca làm")
-    dept_data = pd.DataFrame({
-        'Bộ phận / Ca': ['Văn Phòng', 'Công Nhân - Ca Ngày (N)', 'Công Nhân - Ca Đêm (Đ)'],
-        'Tổng số nhân sự': [45, 55, 48]
-    })
-    fig_bar = px.bar(dept_data, x='Bộ phận / Ca', y='Tổng số nhân sự', color='Bộ phận / Ca', text_auto=True)
+    st.markdown("#### Thống kê quy mô nhân sự theo bộ phận")
+    fig_bar = px.bar(dept_data, x='Bộ phận', y='Số lượng', color='Bộ phận', text_auto=True)
     st.plotly_chart(fig_bar, use_container_width=True)
 
 
