@@ -249,7 +249,7 @@ if df_fp is not None:
                                 for attempt in range(max_retries):
                                     try:
                                         response = client.models.generate_content(
-                                            model='Gemini 3.1 Pro',
+                                            model='Gemini 3.5 Flash',
                                             contents=prompt,
                                         )
                                         break
