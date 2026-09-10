@@ -1,235 +1,263 @@
+import io
+import os
+import time
+from datetime import datetime
 import streamlit as st
 import pandas as pd
-import numpy as np
-from datetime import datetime, time, timedelta
-import io
 import plotly.express as px
-import plotly.graph_objects as go
-import google.generativeai as genai
+from google import genai
+import streamlit.components.v1 as components
 
-# Page config
+# Cấu hình trang
 st.set_page_config(
-    page_title="Hệ Thống Thống Kê Chấm Công / 考勤统计系统",
+    page_title="Hệ Thống Thống Kê & AI Chấm Công / 考勤统计与AI智能系统",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for Bilingual UI & Professional styling
+# Custom CSS cho giao diện song ngữ và các thẻ thống kê
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
     .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-    .stTabs [data-baseweb="tab"] { background-color: #ffffff; border-radius: 4px; padding: 10px 20px; font-weight: bold; }
+    .stTabs [data-baseweb="tab"] { background-color: #ffffff; border-radius: 4px; padding: 10px 20px; font-weight: bold; border: 1px solid #dee2e6; }
     .stTabs [aria-selected="true"] { background-color: #0d6efd !important; color: white !important; }
     .metric-card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-left: 4px solid #0d6efd; }
     </style>
 """, unsafe_allow_html=True)
 
-# Sidebar - Gemini Configuration & File Uploads
-st.sidebar.header("🔑 Cấu hình Gemini API / 谷歌API配置")
-api_key = st.sidebar.text_input("Nhập Gemini API Key / 输入API密钥", type="password")
+# --- SIDEBAR: CẤU HÌNH & TẢI FILE ---
+st.sidebar.header("🔑 系统配置 / Cấu hình hệ thống")
+api_key = st.sidebar.text_input("Nhập Gemini API Key", type="password")
+if api_key:
+    os.environ["GEMINI_API_KEY"] = api_key
 
 st.sidebar.markdown("---")
-st.sidebar.header("📁 Tải file dữ liệu / 上传数据文件")
-uploaded_fingerprint = st.sidebar.file_uploader("1. File Bấm Vân Tay / 指纹打卡文件", type=["xlsx", "xls", "csv"])
-uploaded_schedule = st.sidebar.file_uploader("2. Lịch Xếp Ca / 排班表文件", type=["xlsx", "xls", "csv"])
-uploaded_vp = st.sidebar.file_uploader("3. Danh Sách Nhân Viên VP / 办公室员工名单", type=["xlsx", "xls", "csv"])
-uploaded_cn = st.sidebar.file_uploader("4. Danh Sách Công Nhân / 工人名单", type=["xlsx", "xls", "csv"])
+st.sidebar.header("📁 数据文件上传 / Tải file dữ liệu")
+uploaded_fingerprint = st.sidebar.file_uploader("1) File vân tay / 指纹打卡 Excel", type=["xlsx", "xls", "csv"])
+uploaded_schedule = st.sidebar.file_uploader("2) Lịch xếp ca / 排班表文件 (CN)", type=["xlsx", "xls", "csv"])
+uploaded_staff_vp = st.sidebar.file_uploader("3) Danh sách NV VP / 办公室名单", type=["xlsx", "xls", "csv"])
+uploaded_staff_cn = st.sidebar.file_uploader("4) Danh sách CN / 工人名单", type=["xlsx", "xls", "csv"])
 
-# Main Title bilingual
-st.title("📊 HỆ THỐNG THỐNG KÊ VÀ KIỂM TRA CHẤM CÔNG")
-st.markdown("<h3 style='color: #6c757d;'>考勤统计与检查系统 (Dashboard Song Ngữ Trung - Việt)</h3>", unsafe_allow_html=True)
+# Tiêu đề chính
+st.title("📊 HỆ THỐNG THỐNG KÊ & PHÂN TÍCH CHẤM CÔNG AI")
+st.markdown("<h3 style='color: #6c757d;'>考勤统计与AI智能核对系统 (Song Ngữ Trung - Việt)</h3>", unsafe_allow_html=True)
 
-if uploaded_fingerprint is not None:
-    try:
-        # Đọc file bấm vân tay (hỗ trợ bỏ qua dòng tiêu đề phụ nếu có)
-        df_fp = pd.read_excel(uploaded_fingerprint) if uploaded_fingerprint.name.endswith(('xlsx', 'xls')) else pd.read_csv(uploaded_fingerprint)
-        
-        # Xử lý tự động tìm đúng hàng tiêu đề dựa theo hình ảnh bạn cung cấp
-        for idx, row in df_fp.iterrows():
-            row_str = str(row.values)
-            if 'Mã Nhân Viên' in row_str or 'Mã số NV' in row_str:
-                df_fp.columns = df_fp.iloc[idx]
-                df_fp = df_fp.iloc[idx+1:].reset_index(drop=True)
-                break
-
-        st.success("✅ Tải dữ liệu thành công! / 数据加载成功！")
-
-        # --- ÁNH XẠ CỘT CHÍNH XÁC THEO HÌNH ẢNH MẪU ---
-        cols_map = {str(c).strip(): c for c in df_fp.columns if pd.notnull(c)}
-        
-        id_col = next((cols_map[c] for c in cols_map if 'Mã Nhân Viên' in c or 'Mã số' in c or 'Mã NV' in c), df_fp.columns[1] if len(df_fp.columns) > 1 else df_fp.columns[0])
-        name_col = next((cols_map[c] for c in cols_map if 'Tên nhân viên' in c or 'Họ Và tên' in c or 'Tên' in c), df_fp.columns[2] if len(df_fp.columns) > 2 else None)
-        date_col = next((cols_map[c] for c in cols_map if 'Ngày' in c or 'date' in c.lower()), df_fp.columns[4] if len(df_fp.columns) > 4 else None)
-        in_col = next((cols_map[c] for c in cols_map if 'Giờ vào' in c or 'Vào' in c), None)
-        out_col = next((cols_map[c] for c in cols_map if 'Giờ ra' in c or 'Ra' in c), None)
-        dept_col = next((cols_map[c] for c in cols_map if 'Phòng ban' in c or 'bộ phận' in c), None)
-
-        # Chuẩn hóa định dạng ngày
-        if date_col:
-            df_fp['Clean_Date'] = pd.to_datetime(df_fp[date_col], errors='coerce').dt.strftime('%d/%m/%Y').fillna(df_fp[date_col].astype(str))
-        else:
-            df_fp['Clean_Date'] = "06/09/2026"
-
-        # Sidebar Controls
-        st.sidebar.markdown("---")
-        st.sidebar.header("⚙️ Tùy chọn lọc / 筛选选项")
-        
-        unique_dates = sorted(df_fp['Clean_Date'].dropna().unique())
-        selected_date = st.sidebar.selectbox("Chọn ngày kiểm tra / 选择检查日期", unique_dates if len(unique_dates) > 0 else ["06/09/2026"])
-
-        shift_group = st.sidebar.selectbox(
-            "Chọn khung giờ thống kê / 选择统计时段",
-            ["Tất cả / 全部", "Nhóm vào 7:00 AM / 7:00AM 入场组", "Nhóm vào 19:00 PM / 19:00PM 入场组"]
-        )
-
-        # --- XỬ LÝ DỮ LIỆU THỰC TẾ TỪ FILE VÂN TAY ---
-        df_filtered_date = df_fp[df_fp['Clean_Date'] == selected_date].copy()
-
-        records = []
-        if not df_filtered_date.empty:
-            for _, row in df_filtered_date.iterrows():
-                nv_id = row[id_col] if id_col in df_filtered_date.columns else "N/A"
-                nv_name = row[name_col] if name_col and name_col in df_filtered_date.columns else "Nhân viên"
-                gio_vao = str(row[in_col]) if in_col and in_col in df_filtered_date.columns else "--:--"
-                gio_ra = str(row[out_col]) if out_col and out_col in df_filtered_date.columns else "--:--"
-                
-                # Tính giờ làm thực tế & gán ghi chú chuẩn
-                ghi_chu = "Đủ"
-                gio_lam_str = "8 tiếng"
-                
-                if gio_vao == "nan" or gio_ra == "nan" or gio_vao == "--:--":
-                    ghi_chu = "Vắng"
-                    gio_lam_str = "0 tiếng"
-                else:
-                    try:
-                        # Thử phân tích giờ để đánh giá đi trễ / về sớm
-                        in_time_parsed = pd.to_datetime(gio_vao, errors='coerce')
-                        if pd.notnull(in_time_parsed) and in_time_parsed.hour >= 8:
-                            ghi_chu = "Đi trễ"
-                    except:
-                        pass
-
-                records.append({
-                    "Mã NV / 工号": nv_id,
-                    "Họ và Tên / 姓名": nv_name,
-                    "Giờ Vào / 上班时间": gio_vao,
-                    "Giờ Ra / 下班时间": gio_ra,
-                    "Giờ Làm Thực Tế / 实际工时": gio_lam_str,
-                    "Ghi Chú / 备注": ghi_chu
-                })
-
-        df_result = pd.DataFrame(records)
-
-        # Thống kê số liệu thực tế
-        total_emp = len(df_result)
-        late = len(df_result[df_result["Ghi Chú / 备注"] == "Đi trễ"]) if not df_result.empty else 0
-        early = len(df_result[df_result["Ghi Chú / 备注"] == "Về sớm"]) if not df_result.empty else 0
-        absent = len(df_result[df_result["Ghi Chú / 备注"] == "Vắng"]) if not df_result.empty else 0
-        on_time = total_emp - (late + early + absent)
-        
-        status_counts = [max(on_time, 0), late, early, absent, len(df_result[df_result["Ghi Chú / 备注"] == "Làm không đúng lịch"])]
-        dept_rates = [95, 92, 90, 94]
-
-        # Tab layout for Dashboard & Details
-        tab1, tab2, tab3 = st.tabs([
-            "📈 Dashboard Thống Kê / 统计看板", 
-            "📋 Chi Tiết Chấm Công / 考勤明细", 
-            "⚠️ Cảnh Báo Bất Thường / 异常警报"
-        ])
-
-        with tab1:
-            st.markdown(f"### 📊 Tổng Quan Hoạt Động (Ngày: {selected_date} - Nhóm: {shift_group}) / 运营概览")
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.markdown(f'<div class="metric-card"><h4>Tổng NV / 总员工</h4><h2>{total_emp}</h2><p>Đúng giờ / 准时: {on_time}</p></div>', unsafe_allow_html=True)
-            with col2:
-                st.markdown(f'<div class="metric-card"><h4>Đi Trễ / 迟到</h4><h2>{late}</h2><p>Cần chú ý / 需注意</p></div>', unsafe_allow_html=True)
-            with col3:
-                st.markdown(f'<div class="metric-card"><h4>Về Sớm / 早退</h4><h2>{early}</h2><p>Chưa đủ giờ / 不足工时</p></div>', unsafe_allow_html=True)
-            with col4:
-                st.markdown(f'<div class="metric-card"><h4>Vắng / 缺勤</h4><h2>{absent}</h2><p>Không phép / 无故旷工</p></div>', unsafe_allow_html=True)
-
-            st.markdown("---")
-            
-            c1, c2 = st.columns(2)
-            with c1:
-                fig_status = px.pie(
-                    names=['Đúng giờ / 准时', 'Đi trễ / 迟到', 'Về sớm / 早退', 'Vắng / 缺勤', 'Sai lịch / 排班不符'],
-                    values=status_counts,
-                    title=f"<b>Tỷ lệ trạng thái chấm công ngày {selected_date} / 考勤状态比例</b>",
-                    color_discrete_sequence=px.colors.qualitative.Set2
-                )
-                st.plotly_chart(fig_status, use_container_width=True)
-
-            with c2:
-                fig_dept = px.bar(
-                    x=['VP / 办公室', 'Sản xuất / 生产', 'Bảo trì / 维护', 'Kho / 仓库'],
-                    y=dept_rates,
-                    title=f"<b>Tỷ lệ đi làm theo bộ phận (%) - [{shift_group}] / 各部门出勤率 (%)</b>",
-                    labels={'x': 'Bộ phận / 部门', 'y': 'Tỷ lệ (%) / 比例 (%)'},
-                    color_discrete_sequence=['#0d6efd']
-                )
-                st.plotly_chart(fig_dept, use_container_width=True)
-
-        with tab2:
-            st.markdown(f"### 📋 Bảng Chi Tiết Chấm Công Ngày {selected_date} / 考勤明细表")
-            st.dataframe(df_result, use_container_width=True)
-
-            st.markdown("---")
-            col_d1, col_d2 = st.columns(2)
-            with col_d1:
-                output_excel = io.BytesIO()
-                with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-                    df_result.to_excel(writer, index=False, sheet_name='ThongKe_ChamCong')
-                st.download_button(
-                    label="📥 Tải File Excel Thống Kê / 下载统计Excel文件",
-                    data=output_excel.getvalue(),
-                    file_name=f"ThongKe_Cham_Cong_{str(selected_date).replace('/', '_')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            with col_d2:
-                html_dashboard_report = f"""
-                <html>
-                <head><meta charset="utf-8"><title>Dashboard Báo Cáo Chấm Công {selected_date}</title></head>
-                <body style="font-family: Arial, sans-serif; padding: 20px;">
-                    <h2 style="color: #0d6efd;">HỆ THỐNG THỐNG KÊ CHẤM CÔNG (考勤统计系统)</h2>
-                    <p><b>Ngày thống kê:</b> {selected_date} | <b>Khung giờ:</b> {shift_group}</p>
-                    <hr/>
-                    <h3>Tổng quan:</h3>
-                    <ul>
-                        <li>Tổng nhân viên: {total_emp} (Đúng giờ: {on_time})</li>
-                        <li>Đi trễ: {late}</li>
-                        <li>Về sớm: {early}</li>
-                        <li>Vắng: {absent}</li>
-                    </ul>
-                    <h3>Chi tiết chấm công:</h3>
-                    {df_result.to_html(index=False)}
-                </body>
-                </html>
-                """
-                st.download_button(
-                    label="📥 Tải File PDF Giao Diện / 下载PDF报表文件",
-                    data=html_dashboard_report.encode('utf-8'),
-                    file_name=f"Dashboard_ChamCong_{str(selected_date).replace('/', '_')}.html",
-                    mime="text/html"
-                )
-
-        with tab3:
-            st.markdown(f"### ⚠️ Trọng Tâm Trường Hợp Bất Thường (Ngày {selected_date}) / 异常情况重点分析")
-            
-            abnormal_df = df_result[df_result["Ghi Chú / 备注"] != "Đủ"]
-            if not abnormal_df.empty:
-                for _, row in abnormal_df.iterrows():
-                    st.markdown(f"""
-                    * **[{row['Ghi Chú / 备注']}]**: Nhân viên **{row['Mã NV / 工号']} - {row['Họ và Tên / 姓名']}** (Vào: {row['Giờ Vào / 上班时间']}, Ra: {row['Giờ Ra / 下班时间']}).
-                    """, unsafe_allow_html=True)
+# Hàm tự động tìm dòng tiêu đề thật (Smart Load Excel)
+def load_smart_excel(uploaded_file):
+    if uploaded_file is not None:
+        try:
+            if uploaded_file.name.endswith('.csv'):
+                return pd.read_csv(uploaded_file)
             else:
-                st.success("Không ghi nhận trường hợp bất thường nào trong ngày được chọn. / 所选日期无异常情况。")
+                df_raw = pd.read_excel(uploaded_file, header=None)
+                header_row = 0
+                for idx, row in df_raw.iterrows():
+                    row_str = " ".join([str(val).lower() for val in row.values])
+                    if 'mã' in row_str or 'ngày' in row_str or 'nhân viên' in row_str or 'id' in row_str:
+                        header_row = idx
+                        break
+                return pd.read_excel(uploaded_file, header=header_row)
+        except Exception as e:
+            st.error(f"Lỗi đọc file / 文件读取错误: {e}")
+    return None
 
-    except Exception as e:
-        st.error(f"⚠️ Lỗi xử lý file / 文件处理错误: {e}")
+df_fp = load_smart_excel(uploaded_fingerprint)
+df_sc = load_smart_excel(uploaded_schedule)
+df_vp = load_smart_excel(uploaded_staff_vp)
+df_cn = load_smart_excel(uploaded_staff_cn)
+
+if df_fp is not None:
+    df_fp.columns = df_fp.columns.astype(str).str.strip()
+    date_col = next((col for col in df_fp.columns if any(k in col.lower() for k in ['ngày', 'date', 'ngay'])), None)
+    
+    if date_col:
+        df_fp['Ngày_Clean'] = pd.to_datetime(df_fp[date_col], errors='coerce').dt.date
+        available_dates = sorted(df_fp['Ngày_Clean'].dropna().unique())
+        
+        if available_dates:
+            st.sidebar.markdown("---")
+            st.sidebar.header("📅 Lọc Dữ Liệu / 筛选选项")
+            selected_date = st.sidebar.selectbox("Chọn ngày kiểm tra / 选择检查日期", available_dates)
+            selected_date_str = str(selected_date)
+            
+            df_fp_filtered = df_fp[df_fp['Ngày_Clean'] == selected_date].copy()
+            
+            col_vao = next((c for c in df_fp_filtered.columns if 'vào' in c.lower() or 'vao' in c.lower()), None)
+            col_ra = next((c for c in df_fp_filtered.columns if 'ra' in c.lower()), None)
+            col_dept = next((c for c in df_fp_filtered.columns if 'phòng' in c.lower() or 'bộ phận' in c.lower() or 'dept' in c.lower()), None)
+            
+            def has_time(val):
+                if pd.isna(val):
+                    return False
+                s = str(val).strip().lower()
+                return s not in ['', 'nan', 'none', 'nat', '-', '0:00:00']
+
+            df_fp_filtered['Co_Vao'] = df_fp_filtered[col_vao].apply(has_time) if col_vao else False
+            df_fp_filtered['Co_Ra'] = df_fp_filtered[col_ra].apply(has_time) if col_ra else False
+            
+            def classify_attendance(row):
+                if row['Co_Vao'] and row['Co_Ra']:
+                    return 'Có mặt đủ giờ / 出勤正常'
+                elif row['Co_Vao'] and not row['Co_Ra']:
+                    return 'Thiếu giờ ra (BR) / 缺下班卡'
+                elif not row['Co_Vao'] and row['Co_Ra']:
+                    return 'Thiếu giờ vào (BV) / 缺上班卡'
+                else:
+                    return 'Vắng / Không bấm thẻ / 缺勤'
+
+            df_fp_filtered['Trạng Thái'] = df_fp_filtered.apply(classify_attendance, axis=1)
+            
+            # --- THỐNG KÊ SỐ LIỆU ---
+            total_day_records = len(df_fp_filtered)
+            count_full = (df_fp_filtered['Trạng Thái'] == 'Có mặt đủ giờ / 出勤正常').sum()
+            count_missing = (df_fp_filtered['Trạng Thái'].isin(['Thiếu giờ ra (BR) / 缺下班卡', 'Thiếu giờ vào (BV) / 缺上班卡'])).sum()
+            count_absent = (df_fp_filtered['Trạng Thái'] == 'Vắng / Không bấm thẻ / 缺勤').sum()
+            count_active = count_full + count_missing
+
+            # --- THIẾT KẾ GIAO DIỆN TAB ---
+            tab1, tab2, tab3 = st.tabs([
+                "📈 Dashboard Thống Kê / 统计看板",
+                "📋 Chi Tiết & Xuất Báo Cáo / 考勤明细与导出",
+                "🤖 AI Thông Minh & Đối Chiếu / AI智能核对与分析"
+            ])
+
+            with tab1:
+                st.markdown(f"### 📊 Tổng Quan Hoạt Động Ngày: {selected_date_str} / 运营概览")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.markdown(f'<div class="metric-card"><h4>Tổng Nhân Sự / 总人数</h4><h2>{total_day_records} 人</h2></div>', unsafe_allow_html=True)
+                m2.markdown(f'<div class="metric-card"><h4>Thực Tế Đi Làm / 实际出勤</h4><h2>{count_active} 人</h2></div>', unsafe_allow_html=True)
+                m3.markdown(f'<div class="metric-card"><h4>Thiếu Giờ / 缺卡人数</h4><h2>{count_missing} 人</h2></div>', unsafe_allow_html=True)
+                m4.markdown(f'<div class="metric-card"><h4>Vắng Mặt / 缺勤人数</h4><h2>{count_absent} 人</h2></div>', unsafe_allow_html=True)
+                
+                st.markdown("---")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("#### 考勤状态分布 / Tỷ lệ trạng thái đi làm")
+                    status_df = df_fp_filtered['Trạng Thái'].value_counts().reset_index()
+                    status_df.columns = ['Trạng thái', 'Số lượng']
+                    fig_pie = px.pie(status_df, values='Số lượng', names='Trạng thái', hole=0.45)
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                
+                with c2:
+                    st.markdown("#### 部门出勤对比 / So sánh đi làm theo bộ phận")
+                    if col_dept and col_dept in df_fp_filtered.columns:
+                        dept_series = df_fp_filtered[col_dept].astype(str)
+                    else:
+                        dept_series = pd.Series(["Chung / 综合"] * len(df_fp_filtered))
+                    
+                    df_fp_filtered['Bộ Phận Chuẩn'] = dept_series.apply(
+                        lambda x: 'Văn Phòng / 办公室' if any(k in x.lower() for k in ['văn phòng', 'vp', 'office']) else 'Công Nhân / 工人'
+                    )
+                    dept_summary = df_fp_filtered.groupby(['Bộ Phận Chuẩn', 'Trạng Thái']).size().reset_index(name='Số lượng')
+                    fig_bar = px.bar(dept_summary, x='Bộ Phận Chuẩn', y='Số lượng', color='Trạng Thái', barmode='group', text_auto=True)
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+            with tab2:
+                st.markdown(f"### 📋 Bảng Chi Tiết Chấm Công Ngày {selected_date_str} / 考勤明细表")
+                st.dataframe(df_fp_filtered, use_container_width=True)
+                
+                st.markdown("---")
+                col_dl1, col_dl2 = st.columns(2)
+                with col_dl1:
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        df_fp_filtered.to_excel(writer, index=False, sheet_name=f'ChamCong_{selected_date_str}')
+                    st.download_button(
+                        label="📥 Tải xuống file Excel / 下载 Excel 报告",
+                        data=output.getvalue(),
+                        file_name=f"Attendance_Report_{selected_date_str}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                with col_dl2:
+                    pdf_button_html = """
+                    <button onclick="window.print()" style="
+                        background-color: #ff4b4b;
+                        color: white;
+                        padding: 10px 20px;
+                        border: none;
+                        border-radius: 5px;
+                        cursor: pointer;
+                        font-size: 16px;
+                        font-weight: bold;
+                        width: 100%;
+                    ">
+                        📄 In / Lưu giao diện thành PDF (打印 / 保存为PDF)
+                    </button>
+                    """
+                    components.html(pdf_button_html, height=50)
+
+            with tab3:
+                st.markdown(f"### 🤖 Phân Tích & Đối Chiếu Thông Minh Cùng Gemini AI ({selected_date_str})")
+                st.info("Hệ thống sẽ sử dụng Gemini AI (SDK mới nhất) để kiểm tra chéo lịch ca, danh sách nhân viên và vân tay thực tế nhằm tìm ra các trường hợp bất thường.")
+                
+                if st.button("🚀 Bắt đầu chạy phân tích AI / 开始考勤核对分析", type="primary"):
+                    if not api_key:
+                        st.warning("Vui lòng nhập API Key ở thanh bên trái! / 请输入 API Key。")
+                    else:
+                        with st.spinner("AI đang xử lý và đối chiếu dữ liệu, vui lòng đợi trong giây lát..."):
+                            try:
+                                client = genai.Client()
+                                fp_data = df_fp_filtered.to_string()
+                                vp_data = df_vp.to_string() if df_vp is not None else "Không có"
+                                cn_data = df_cn.to_string() if df_cn is not None else "Không có"
+                                sc_data = df_sc.to_string() if df_sc is not None else "Không có"
+                                
+                                prompt = f"""
+                                Bạn là hệ thống đối chiếu nhân sự và chấm công tự động thông minh. 
+                                Hãy thực hiện đối chiếu và phân tích dữ liệu CHO ĐÚNG NGÀY: {selected_date_str}.
+                                
+                                DỮ LIỆU ĐẦU VÀO:
+                                1. File bấm vân tay:
+                                {fp_data}
+                                2. Danh sách NV Văn Phòng (VP):
+                                {vp_data}
+                                3. Danh sách Công Nhân (CN):
+                                {cn_data}
+                                4. Lịch xếp ca CN:
+                                {sc_data}
+                                
+                                QUY TẮC: 
+                                - VP chuẩn 8h-17h, Chủ Nhật nghỉ. 
+                                - Mã 575 (7h-15h), 749 & 949 (7h-19h).
+                                - CN theo lịch ca N (7h-19h) hoặc Đ (19h-7h hôm sau). Thiếu vào = "BV", thiếu ra = "BR", thiếu cả = "Vắng".
+                                - TRỌNG TÂM: Chỉ đưa ra các trường hợp bất thường ("đi trễ", "về sớm", "làm không đúng lịch", "vắng", "BV", "BR", "Lễ").
+                                
+                                YÊU CẦU ĐẦU RA (TABLE MARKDOWN):
+                                Mã NV | Họ và Tên | Giờ vào | Giờ ra | Giờ làm thực tế | Ghi chú
+                                """
+                                
+                                max_retries = 3
+                                response = None
+                                for attempt in range(max_retries):
+                                    try:
+                                        response = client.models.generate_content(
+                                            model='gemini-2.5-flash',
+                                            contents=prompt,
+                                        )
+                                        break
+                                    except Exception as err:
+                                        if "503" in str(err) and attempt < max_retries - 1:
+                                            time.sleep(3)
+                                            continue
+                                        else:
+                                            raise err
+                                
+                                st.session_state['analysis_result'] = response.text
+                                st.session_state['result_date'] = selected_date_str
+                                st.success("✅ Hoàn tất đối chiếu chấm công! / 考勤核对完成！")
+                                
+                            except Exception as e:
+                                st.error(f"Lỗi xử lý AI / 处理出错: {e}")
+                
+                if 'analysis_result' in st.session_state:
+                    res_date = st.session_state.get('result_date', selected_date_str)
+                    st.markdown(f"### 📋 Kết Quả Phân Tích Bất Thường ({res_date})")
+                    st.markdown(st.session_state['analysis_result'])
+        else:
+            st.warning("⚠️ Không nhận diện được dữ liệu ngày trong file vân tay.")
+    else:
+        st.error("❌ Không tìm thấy cột 'Ngày' trong file vân tay.")
 else:
-    st.info("👈 Vui lòng tải file bấm vân tay và các file danh sách ở thanh bên trái để bắt đầu. / 请在左侧边栏上传指纹打卡及名单文件以开始。")
+    st.info("👈 Vui lòng tải file bấm vân tay (`.xlsx`, `.xls`, `.csv`) ở thanh bên trái để bắt đầu khởi chạy hệ thống.")
