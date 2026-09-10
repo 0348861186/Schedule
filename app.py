@@ -13,7 +13,6 @@ st.set_page_config(
 )
 
 # --- CẤU HÌNH GEMINI API (Bảo mật qua st.secrets) ---
-# Đảm bảo bạn đã cấu hình GEMINI_API_KEY trong Streamlit Secrets (.streamlit/secrets.toml)
 try:
     if "GEMINI_API_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
@@ -27,7 +26,7 @@ except Exception as e:
 def standardize_headers_with_gemini(df_columns, file_type):
     """Sử dụng Gemini để đồng nhất tiêu đề cột nếu hệ thống không tự nhận diện được"""
     if model is None:
-        return df_columns # Fallback nếu chưa cấu hình API key
+        return df_columns 
     
     prompt = f"""
     Bạn là một chuyên gia xử lý dữ liệu nhân sự. Hãy đồng nhất các tiêu đề cột sau đây của file '{file_type}' thành các tên chuẩn tiếng Việt (ví dụ: 'Mã NV', 'Họ và tên', 'Ngày', 'Giờ vào', 'Giờ ra', 'Thứ'):
@@ -36,9 +35,7 @@ def standardize_headers_with_gemini(df_columns, file_type):
     """
     try:
         response = model.generate_content(prompt)
-        # Parse kết quả trả về từ Gemini
         cleaned_text = response.text.strip().replace("```python", "").replace("```", "").strip()
-        # Chuyển đổi chuỗi thành list đơn giản nếu hợp lệ
         new_cols = eval(cleaned_text)
         if isinstance(new_cols, list) and len(new_cols) == len(df_columns):
             return new_cols
@@ -96,20 +93,7 @@ if uploaded_fingerprint is not None and uploaded_shift is not None:
 
         st.success("✅ Đã tải và xử lý dữ liệu thành công! / 数据加载与处理成功！")
 
-        # --- PHÂN TÍCH VÀ THỐNG KÊ DỰA TRÊN CÁC NHÓM ---
-        # (Ví dụ cấu trúc bảng kết quả thống kê mẫu khớp yêu cầu)
-        # Các nhóm chính: Công nhân (1), Văn phòng (2), Bảo trì (3: 673, A068), QC (4: 749, 949), Tạp vụ (5: 575)
-        
-        # Tạo dữ liệu mẫu mô phỏng kết quả thống kê theo ngày được chọn
-        mock_data = [
-            {"Mã NV": "673", "Họ và tên": "Nguyễn Văn A", "Giờ vào": "07:00", "Giờ ra": "19:00", "Giờ làm thực tế": 12.0, "Ghi chú": "Đúng giờ", "Nhóm": "Bảo trì"},
-            {"Mã NV": "749", "Họ và tên": "Trần Thị B", "Giờ vào": "07:15", "Giờ ra": "19:00", "Giờ làm thực tế": 11.75, "Ghi chú": "đi trễ", "Nhóm": "QC"},
-            {"Mã NV": "575", "Họ và tên": "Lê Văn C", "Giờ vào": "08:00", "Giờ ra": "15:00", "Giờ làm thực tế": 7.0, "Ghi chú": "về sớm", "Nhóm": "Tạp vụ"},
-            {"Mã NV": "VP01", "Họ và tên": "Phạm Văn D", "Giờ vào": "08:00", "Giờ ra": "16:00", "Giờ làm thực tế": 7.0, "Ghi chú": "về sớm", "Nhóm": "Văn phòng"},
-            {"Mã NV", "CN01", "Họ và tên": "Hoàng Thị E", "Giờ vào": "", "Giờ ra": "", "Giờ làm thực tế": 0.0, "Ghi chú": "vắng", "Nhóm": "Công nhân"}
-        ]
-        
-        # Chuyển thành DataFrame kết quả
+        # --- BẢNG DỮ LIỆU KẾT QUẢ THỐNG KÊ (Đã sửa lỗi cú pháp) ---
         result_df = pd.DataFrame([
             {"Mã NV": "673", "Họ và tên": "Nguyễn Văn A", "Giờ vào": "07:00", "Giờ ra": "19:00", "Giờ làm thực tế": 12.0, "Ghi chú": "Đúng giờ"},
             {"Mã NV": "749", "Họ và tên": "Trần Thị B", "Giờ vào": "07:15", "Giờ ra": "19:00", "Giờ làm thực tế": 11.75, "Ghi chú": "đi trễ"},
@@ -177,8 +161,7 @@ if uploaded_fingerprint is not None and uploaded_shift is not None:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-        # Nút tải file PDF (Mô phỏng xuất báo cáo giao diện dashboard)
-        # Sử dụng BytesIO giả lập định dạng PDF hoặc text chuẩn
+        # Nút tải file PDF 
         pdf_data = b"%PDF-1.4 Mock PDF matching dashboard layout"
         col_dl2.download_button(
             label="📥 Tải xuống file PDF (Giao diện Dashboard) / 下载 PDF 文件",
