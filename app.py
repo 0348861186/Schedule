@@ -12,7 +12,7 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # ==========================================
-# 1. CẤU HÌNH & KHỞI TẠO HỆ THỐNG KẾT NỐI
+# 1. CẤU HÌNH & KHỞI TẠO HỆ THỐNG
 # ==========================================
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 if api_key:
@@ -40,9 +40,8 @@ LANG = {
         'total_emp': 'Tổng số NV',
         'present': 'Đi làm',
         'absent': 'Vắng',
-        'chart_title': 'Biểu đồ tình trạng đi làm theo Nhóm',
+        'chart_title': 'Biểu đồ tình trạng đi làm theo Nhóm và Trạng Thái',
         'no_data': 'Vui lòng tải đủ file dữ liệu ở thanh bên để hệ thống xử lý.',
-        'empty_result': 'Không có dữ liệu nhân sự để thống kê trong ngày này.',
         'processing': 'Hệ thống đang quét và đồng nhất cấu trúc dữ liệu...',
         'success_proc': 'Đồng nhất cấu trúc dữ liệu thành công!',
     },
@@ -62,16 +61,15 @@ LANG = {
         'total_emp': '总人数',
         'present': '出勤',
         'absent': '缺勤',
-        'chart_title': '各组别出勤状态分析图',
+        'chart_title': '各组别及考勤状态图表分析',
         'no_data': '请在侧边栏上传完整的文件以便系统处理。',
-        'empty_result': '当天没有可统计的人员数据。',
         'processing': '系统正在扫描并对齐数据结构...',
         'success_proc': '数据结构对齐成功！',
     }
 }
 
 # ==========================================
-# 3. HÀM XỬ LÝ TIÊU ĐỀ THÔNG MINH QUA MÔ HÌNH LỚN
+# 3. HÀM XỬ LÝ TIÊU ĐỀ THÔNG MINH
 # ==========================================
 def smart_parse_columns(df, expected_cols, file_description):
     if client is None:
@@ -105,7 +103,6 @@ def smart_parse_columns(df, expected_cols, file_description):
 def process_attendance(df_finger, df_schedule, df_office, df_worker, target_date):
     df_f = df_finger.copy()
     
-    # Tìm linh hoạt các cột trong file vân tay
     def get_c(df, keys):
         for c in df.columns:
             if any(k in str(c).lower() for k in keys):
@@ -127,7 +124,6 @@ def process_attendance(df_finger, df_schedule, df_office, df_worker, target_date
 
     results = []
     
-    # Lấy thông tin ID và Tên từ file danh sách
     off_id_c = get_c(df_office, ['mã nv', 'ma nv', 'manv', 'code', 'id', 'mã']) if df_office is not None else None
     off_name_c = get_c(df_office, ['tên', 'ten', 'name', 'họ và tên']) if df_office is not None else None
     
@@ -141,7 +137,7 @@ def process_attendance(df_finger, df_schedule, df_office, df_worker, target_date
     all_employees = []
     if df_office is not None and off_id_c:
         for _, r in df_office.iterrows():
-            all_employees.append({'Mã NV': str(r[off_id_c]), 'Tên': r.get(off_name_c, 'N/A') if off_name_c else 'N/A', 'Nhóm': 'VP'})
+            all_employees.append({'Mã NV': str(r[off_id_c]), 'Tên': r.get(off_name_c, 'N/A') if off_name_c else 'N/A', 'Nhóm': 'Văn phòng'})
             
     if df_worker is not None and wr_id_c:
         for _, r in df_worker.iterrows():
@@ -173,7 +169,7 @@ def process_attendance(df_finger, df_schedule, df_office, df_worker, target_date
         is_sun = target_date.weekday() == 6
         
         # --- ÁP DỤNG QUY TẮC CHO TỪNG NHÓM ---
-        if grp == 'VP':
+        if grp == 'Văn phòng':
             if is_sun:
                 note = "Nghỉ CN / 周日休息"
             elif emp_f.empty:
@@ -205,7 +201,6 @@ def process_attendance(df_finger, df_schedule, df_office, df_worker, target_date
                     note = "Đúng giờ / 准时"
                 
         else:
-            # Nhóm Công nhân & Bảo trì dựa vào lịch xếp ca
             shift = "Nghỉ"
             sched_id_c = get_c(df_schedule, ['mã nv', 'ma nv', 'manv', 'code', 'id', 'mã']) if df_schedule is not None else None
             if df_schedule is not None and sched_id_c:
@@ -236,6 +231,7 @@ def process_attendance(df_finger, df_schedule, df_office, df_worker, target_date
         results.append({
             'mã NV': eid,
             'họ và tên': name,
+            'nhóm': grp,
             'giờ vào': t_in if (t_in is not None and not pd.isna(t_in)) else "Thiếu/无",
             'giờ ra': t_out if (t_out is not None and not pd.isna(t_out)) else "Thiếu/无",
             'giờ làm thực tế': actual_h,
@@ -278,7 +274,6 @@ with col_y:
 try:
     target_date = datetime.date(sel_year, sel_month, sel_day)
 except ValueError:
-    st.error("Ngày tháng không hợp lệ / 日期无效")
     target_date = datetime.date(2026, 9, 10)
 
 if file_finger and file_office:
@@ -288,42 +283,53 @@ if file_finger and file_office:
         df_schedule = pd.read_excel(file_schedule) if file_schedule else None
         df_worker = pd.read_excel(file_worker) if file_worker else None
 
-        # Tích hợp quét tiêu đề thông minh
         if client:
             smart_parse_columns(df_finger, ["mã nv", "ngày", "giờ vào", "giờ ra", "tổng giờ"], "File vân tay")
             
         df_result = process_attendance(df_finger, df_schedule, df_office, df_worker, target_date)
     st.toast(lang['success_proc'])
 
-    if df_result.empty:
-        st.warning(lang['empty_result'])
-    else:
-        st.header(f"📈 {lang['stats_section']}")
-        total_emp = len(df_result)
-        absent_count = len(df_result[df_result['ghi chú'].str.contains("Vắng|缺勤")])
-        present_count = total_emp - absent_count
-        
-        m1, m2, m3 = st.columns(3)
-        m1.metric(lang['total_emp'], total_emp)
-        m2.metric(lang['present'], present_count)
-        m3.metric(lang['absent'], absent_count)
+    # HIỂN THỊ LUÔN KHU VỰC THỐNG KÊ VÀ BIỂU ĐỒ TRỰC QUAN CHUYÊN NGHIỆP
+    st.header(f"📈 {lang['stats_section']}")
+    total_emp = len(df_result)
+    absent_count = len(df_result[df_result['ghi chú'].str.contains("Vắng|缺勤")]) if not df_result.empty else 0
+    present_count = total_emp - absent_count
+    
+    m1, m2, m3 = st.columns(3)
+    m1.metric(lang['total_emp'], total_emp)
+    m2.metric(lang['present'], present_count)
+    m3.metric(lang['absent'], absent_count)
 
-        fig = px.bar(df_result, x='mã NV', color='ghi chú',
-                     title=lang['chart_title'],
-                     barmode='stack', text_auto=True,
-                     color_discrete_sequence=px.colors.qualitative.Pastel)
+    if not df_result.empty:
+        # Biểu đồ cột phân tích trực quan chuyên nghiệp phân theo Nhóm và Trạng thái Ghi chú
+        fig = px.bar(
+            df_result, 
+            x='nhóm', 
+            color='ghi chú',
+            title=lang['chart_title'],
+            barmode='stack', 
+            text_auto=True,
+            color_discrete_sequence=px.colors.qualitative.Pastel
+        )
+        fig.update_layout(xaxis_title="Nhóm Nhân Sự / 人员组别", yaxis_title="Số Lượng / 数量")
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Không có dữ liệu nhân sự phù hợp để hiển thị biểu đồ phân tích cho ngày này.")
 
-        st.header(f"📋 {lang['report_section']} ({target_date})")
-        st.dataframe(df_result, use_container_width=True)
+    st.header(f"📋 {lang['report_section']} ({target_date})")
+    
+    # Hiển thị bảng lược bỏ cột nhóm phụ trong bảng xuất chính nhưng giữ nội dung chuẩn xác
+    display_df = df_result[['mã NV', 'họ và tên', 'giờ vào', 'giờ ra', 'giờ làm thực tế', 'ghi chú']] if not df_result.empty else df_result
+    st.dataframe(display_df, use_container_width=True)
 
+    if not df_result.empty:
         st.subheader("📥 Tải Xuống Báo Cáo / 下载报告")
         ex_col, pdf_col = st.columns(2)
 
-        # Xuất Excel đúng các cột yêu cầu
+        # Xuất Excel đúng chuẩn yêu cầu
         output_excel = io.BytesIO()
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-            df_result[['mã NV', 'họ và tên', 'giờ vào', 'giờ ra', 'giờ làm thực tế', 'ghi chú']].to_excel(writer, index=False, sheet_name='ThongKe_Attendance')
+            display_df.to_excel(writer, index=False, sheet_name='ThongKe_Attendance')
         excel_bytes = output_excel.getvalue()
 
         with ex_col:
@@ -346,7 +352,7 @@ if file_finger and file_office:
         story.append(Paragraph(f"Tổng NV: {total_emp} | Đi làm: {present_count} | Vắng: {absent_count}", styles['Normal']))
         story.append(Spacer(1, 15))
 
-        pdf_data = [list(df_result.columns)] + df_result.values.tolist()
+        pdf_data = [list(display_df.columns)] + display_df.values.tolist()
         t = Table(pdf_data)
         t.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1f4e78")),
