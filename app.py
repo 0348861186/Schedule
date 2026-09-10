@@ -56,26 +56,24 @@ if uploaded_fingerprint is not None:
         if possible_name_cols:
             df_fp.rename(columns={possible_name_cols[0]: "Họ và tên"}, inplace=True)
 
-        # --- BỘ LỌC NGÀY THÁNG THỰC TẾ ---
+        # --- LỌC DỮ LIỆU THEO NGÀY THÁNG NĂM THỰC TẾ ---
         possible_date_cols = [c for c in df_fp.columns if 'ngày' in str(c).lower() or 'date' in str(c).lower() or 'thời gian' in str(c).lower() or 'time' in str(c).lower() or 'gio' in str(c).lower()]
         
         if possible_date_cols:
             date_col = possible_date_cols[0]
-            # Ép kiểu dữ liệu cột thời gian sang datetime
             df_fp[date_col] = pd.to_datetime(df_fp[date_col], errors='coerce')
             
-            # Lọc theo đúng ngày, tháng, năm đã chọn trên sidebar
+            # Lọc chính xác theo ngày, tháng, năm trên sidebar
             df_fp = df_fp[
                 (df_fp[date_col].dt.day == selected_day) & 
                 (df_fp[date_col].dt.month == selected_month) & 
                 (df_fp[date_col].dt.year == selected_year)
             ]
         else:
-            st.warning("⚠️ File Excel không chứa cột Ngày/Thời gian cụ thể. Hệ thống sẽ thống kê toàn bộ dữ liệu có trong file. / Excel文件不包含日期列，系统将统计文件中的所有数据。")
+            st.warning("⚠️ Không tìm thấy cột ngày tháng trong file. Đang hiển thị toàn bộ dữ liệu thực tế trong file. / 文件中未找到日期列，显示全部实际数据。")
 
-        # Kiểm tra nếu file thực tế không có dữ liệu sau khi lọc
         if df_fp.empty:
-            st.error(f"❌ Không có dữ liệu chấm công thực tế cho ngày {selected_day}/{selected_month}/{selected_year} trong file bạn tải lên! / 该日期无实际考勤数据！")
+            st.error(f"❌ Không có dữ liệu thực tế cho ngày {selected_day}/{selected_month}/{selected_year} trong file tải lên! / 该日期无实际数据！")
         else:
             st.success("✅ Đã đọc dữ liệu thực tế thành công! / 数据加载成功！")
 
@@ -87,7 +85,7 @@ if uploaded_fingerprint is not None:
                     nhóm = "QC"
                 elif ma_nv == "575":
                     nhóm = "Tạp vụ / 杂务"
-                elif ma_nv.startswith("VP") or str(row.get("Loại", "")).upper() == "VP":
+                elif ma_nv.startswith("VP") or row.get("Loại") == "VP":
                     nhóm = "Văn phòng / 办公室"
                 else:
                     nhóm = "Công nhân / 工人"
@@ -121,7 +119,7 @@ if uploaded_fingerprint is not None:
                 result_df["Ghi chú"] = df_fp["Ghi chú"]
                 result_df["Nhóm"] = df_fp["Nhóm"]
             else:
-                # Nếu thiếu cột Mã NV trong dữ liệu thực tế
+                # Xử lý khi file thực tế không có cột Mã NV nhưng vẫn giữ nguyên cấu trúc hiển thị cũ
                 result_df = df_fp.copy()
                 result_df["Mã NV"] = "N/A"
                 result_df["Họ và tên"] = "Nhân viên thực tế"
@@ -131,8 +129,8 @@ if uploaded_fingerprint is not None:
 
             total_nv = len(result_df)
             total_dung_gio = len(result_df[result_df["Ghi chú"].str.contains("Đúng giờ|准时", case=False, na=False)])
-            total_tre = len(result_df[result_df["Ghi chú"].str.contains("trễ|迟|BV|BR", case=False, na=False)])
-            total_vang = len(result_df[result_df["Ghi chú"].str.contains("vắng|缺", case=False, na=False)])
+            total_tre = len(result_df[result_df["Ghi chú"].str.contains("trễ|迟到|BV|BR", case=False, na=False)])
+            total_vang = len(result_df[result_df["Ghi chú"].str.contains("vắng|缺勤", case=False, na=False)])
 
             st.markdown(f"### 📌 Báo cáo ngày: {selected_day}/{selected_month}/{selected_year} / 日期报告")
             
@@ -173,6 +171,6 @@ if uploaded_fingerprint is not None:
             col_dl2.download_button("📥 Tải xuống file PDF (Dashboard) / 下载 PDF 文件", b"%PDF-1.4 Dashboard Report Export", file_name=f"BaoCao_{selected_day}_{selected_month}_{selected_year}.pdf", mime="application/pdf")
 
     except Exception as e:
-        st.error(f"❌ Lỗi xử lý dữ liệu thực tế: {e} / 数据处理错误: {e}")
+        st.error(f"❌ Lỗi xử lý dữ liệu: {e} / 数据处理错误")
 else:
-    st.info("💡 Vui lòng tải file bấm vân tay ở thanh bên trái để hiển thị dữ liệu và biểu đồ thực tế. / 请在左侧上传打卡文件。")
+    st.info("💡 Vui lòng tải file bấm vân tay ở thanh bên trái để hiển thị biểu đồ. / 请在左侧上传打卡文件。")
