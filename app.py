@@ -71,13 +71,16 @@ if uploaded_fingerprint is not None:
         st.sidebar.markdown("---")
         st.sidebar.header("⚙️ Tùy chọn lọc / 筛选选项")
         
-        # Date selection from fingerprint file
-        date_col = [c for c in df_fp.columns if 'ngay' in str(c).lower() or 'date' in str(c).lower() or 'ngày' in str(c).lower()]
+        # Date selection upgrade: dropdown from file columns or intuitive date_input picker
+        date_col = [c for c in df_fp.columns if any(k in str(c).lower() for k in ['ngay', 'date', 'ngày', 'time', 'gio'])]
         if date_col:
+            df_fp[date_col[0]] = pd.to_datetime(df_fp[date_col[0]], errors='coerce').dt.strftime('%d/%m/%Y').fillna(df_fp[date_col[0]].astype(str))
             unique_dates = sorted(df_fp[date_col[0]].dropna().unique())
             selected_date = st.sidebar.selectbox("Chọn ngày kiểm tra / 选择检查日期", unique_dates)
         else:
-            selected_date = st.sidebar.text_input("Nhập ngày (DD/MM/YYYY) / 输入日期", "06/09/2026")
+            default_date = datetime.today().date()
+            picked_date = st.sidebar.date_input("Chọn ngày / 选择日期", default_date)
+            selected_date = picked_date.strftime("%d/%m/%Y")
 
         # Shift group dropdown
         shift_group = st.sidebar.selectbox(
@@ -86,9 +89,8 @@ if uploaded_fingerprint is not None:
         )
 
         # --- DYNAMIC DATA FILTERING LOGIC BASED ON USER SELECTIONS ---
-        # Mock/Dynamic calculation simulation based on selected filters to make charts responsive
         if "7:00 AM" in shift_group:
-            status_counts = [55, 5, 3, 1, 2]  # Total subset for 7:00 AM group
+            status_counts = [55, 5, 3, 1, 2]  
             dept_rates = [96, 93, 91, 95]
             total_emp = 66
             on_time = 55
@@ -96,7 +98,7 @@ if uploaded_fingerprint is not None:
             early = 3
             absent = 1
         elif "19:00 PM" in shift_group:
-            status_counts = [30, 3, 2, 1, 1]  # Total subset for 19:00 PM group
+            status_counts = [30, 3, 2, 1, 1]  
             dept_rates = [94, 91, 89, 92]
             total_emp = 37
             on_time = 30
@@ -104,7 +106,7 @@ if uploaded_fingerprint is not None:
             early = 2
             absent = 1
         else:
-            status_counts = [85, 8, 5, 2, 3]  # All groups combined
+            status_counts = [85, 8, 5, 2, 3]  
             dept_rates = [95, 92, 90, 94]
             total_emp = 120
             on_time = 105
@@ -122,7 +124,6 @@ if uploaded_fingerprint is not None:
         with tab1:
             st.markdown(f"### 📊 Tổng Quan Hoạt Động (Ngày: {selected_date} - Nhóm: {shift_group}) / 运营概览")
             
-            # Metrics Row (Dynamic)
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.markdown(f'<div class="metric-card"><h4>Tổng NV / 总员工</h4><h2>{total_emp}</h2><p>Đúng giờ / 准时: {on_time}</p></div>', unsafe_allow_html=True)
@@ -135,7 +136,6 @@ if uploaded_fingerprint is not None:
 
             st.markdown("---")
             
-            # Charts (Dynamic reflecting selected_date & shift_group)
             c1, c2 = st.columns(2)
             with c1:
                 fig_status = px.pie(
@@ -159,7 +159,6 @@ if uploaded_fingerprint is not None:
         with tab2:
             st.markdown(f"### 📋 Bảng Chi Tiết Chấm Công Ngày {selected_date} / 考勤明细表")
             
-            # Sample filtered data table conforming to requirements
             sample_data = {
                 "Mã NV / 工号": ["VP01", "575", "749", "A068", "F01", "VP02"],
                 "Họ và Tên / 姓名": ["Nguyễn Văn A", "Trần Văn B", "Lê Văn C", "Phạm Văn D", "Hoàng Thị E", "Nguyễn Thị F"],
@@ -172,7 +171,6 @@ if uploaded_fingerprint is not None:
             df_result = pd.DataFrame(sample_data)
             st.dataframe(df_result, use_container_width=True)
 
-            # Export buttons
             col_d1, col_d2 = st.columns(2)
             with col_d1:
                 output_excel = io.BytesIO()
