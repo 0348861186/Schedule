@@ -82,6 +82,16 @@ if df_fp is not None:
             selected_date = st.sidebar.selectbox("Chọn ngày kiểm tra / 选择检查日期", available_dates)
             selected_date_str = str(selected_date)
             
+            # --- BỔ SUNG PHẦN CHỌN KHUNG GIỜ THỐNG KÊ ---
+            shift_group = st.sidebar.selectbox(
+                "Chọn khung giờ thống kê / 选择统计时段",
+                [
+                    "Tất cả / 全部",
+                    "Nhóm vào 7:00 AM / 7:00AM 入场组",
+                    "Nhóm vào 19:00 PM / 19:00PM 入场组"
+                ]
+            )
+            
             df_fp_filtered = df_fp[df_fp['Ngày_Clean'] == selected_date].copy()
             
             col_vao = next((c for c in df_fp_filtered.columns if 'vào' in c.lower() or 'vao' in c.lower()), None)
@@ -109,6 +119,12 @@ if df_fp is not None:
 
             df_fp_filtered['Trạng Thái'] = df_fp_filtered.apply(classify_attendance, axis=1)
             
+            # --- LỌC DỮ LIỆU THEO KHUNG GIỜ NẾU CÓ CHỌN ---
+            if shift_group == "Nhóm vào 7:00 AM / 7:00AM 入场组" and col_vao:
+                df_fp_filtered = df_fp_filtered[df_fp_filtered[col_vao].astype(str).str.contains('07:|7:', na=False)]
+            elif shift_group == "Nhóm vào 19:00 PM / 19:00PM 入场组" and col_vao:
+                df_fp_filtered = df_fp_filtered[df_fp_filtered[col_vao].astype(str).str.contains('19:', na=False)]
+            
             # --- THỐNG KÊ SỐ LIỆU ---
             total_day_records = len(df_fp_filtered)
             count_full = (df_fp_filtered['Trạng Thái'] == 'Có mặt đủ giờ / 出勤正常').sum()
@@ -124,7 +140,7 @@ if df_fp is not None:
             ])
 
             with tab1:
-                st.markdown(f"### 📊 Tổng Quan Hoạt Động Ngày: {selected_date_str} / 运营概览")
+                st.markdown(f"### 📊 Tổng Quan Hoạt Động (Ngày: {selected_date_str} - Khung giờ: {shift_group}) / 运营概览")
                 m1, m2, m3, m4 = st.columns(4)
                 m1.markdown(f'<div class="metric-card"><h4>Tổng Nhân Sự / 总人数</h4><h2>{total_day_records} 人</h2></div>', unsafe_allow_html=True)
                 m2.markdown(f'<div class="metric-card"><h4>Thực Tế Đi Làm / 实际出勤</h4><h2>{count_active} 人</h2></div>', unsafe_allow_html=True)
@@ -206,7 +222,7 @@ if df_fp is not None:
                                 
                                 prompt = f"""
                                 Bạn là hệ thống đối chiếu nhân sự và chấm công tự động thông minh. 
-                                Hãy thực hiện đối chiếu và phân tích dữ liệu CHO ĐÚNG NGÀY: {selected_date_str}.
+                                Hãy thực hiện đối chiếu và phân tích dữ liệu CHO ĐÚNG NGÀY: {selected_date_str} (Khung giờ: {shift_group}).
                                 
                                 DỮ LIỆU ĐẦU VÀO:
                                 1. File bấm vân tay:
