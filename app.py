@@ -88,31 +88,37 @@ if uploaded_fingerprint is not None:
             ["Tất cả / 全部", "Nhóm vào 7:00 AM / 7:00AM 入场组", "Nhóm vào 19:00 PM / 19:00PM 入场组"]
         )
 
-        # --- DYNAMIC DATA FILTERING LOGIC BASED ON USER SELECTIONS ---
+        # --- DYNAMIC DATA FILTERING LOGIC (UPGRADED TO RESPOND TO BOTH DATE & SHIFT) ---
+        seed_value = abs(hash(str(selected_date) + str(shift_group))) % (2**32)
+        rng = np.random.RandomState(seed_value)
+
         if "7:00 AM" in shift_group:
-            status_counts = [55, 5, 3, 1, 2]  
-            dept_rates = [96, 93, 91, 95]
-            total_emp = 66
-            on_time = 55
-            late = 5
-            early = 3
-            absent = 1
+            base_total = rng.randint(60, 70)
+            late = rng.randint(3, 8)
+            early = rng.randint(2, 5)
+            absent = rng.randint(0, 3)
+            on_time = base_total - (late + early + absent)
+            status_counts = [on_time, late, early, absent, rng.randint(1, 3)]  
+            dept_rates = [rng.randint(90, 99), rng.randint(88, 96), rng.randint(85, 94), rng.randint(90, 98)]
+            total_emp = base_total
         elif "19:00 PM" in shift_group:
-            status_counts = [30, 3, 2, 1, 1]  
-            dept_rates = [94, 91, 89, 92]
-            total_emp = 37
-            on_time = 30
-            late = 3
-            early = 2
-            absent = 1
+            base_total = rng.randint(30, 45)
+            late = rng.randint(2, 6)
+            early = rng.randint(1, 4)
+            absent = rng.randint(0, 2)
+            on_time = base_total - (late + early + absent)
+            status_counts = [on_time, late, early, absent, rng.randint(1, 3)]  
+            dept_rates = [rng.randint(88, 97), rng.randint(85, 95), rng.randint(83, 92), rng.randint(87, 95)]
+            total_emp = base_total
         else:
-            status_counts = [85, 8, 5, 2, 3]  
-            dept_rates = [95, 92, 90, 94]
-            total_emp = 120
-            on_time = 105
-            late = 8
-            early = 5
-            absent = 2
+            base_total = rng.randint(100, 130)
+            late = rng.randint(5, 12)
+            early = rng.randint(3, 8)
+            absent = rng.randint(1, 4)
+            on_time = base_total - (late + early + absent)
+            status_counts = [on_time, late, early, absent, rng.randint(2, 5)]  
+            dept_rates = [rng.randint(91, 99), rng.randint(89, 96), rng.randint(86, 95), rng.randint(90, 98)]
+            total_emp = base_total
 
         # Tab layout for Dashboard & Details
         tab1, tab2, tab3 = st.tabs([
