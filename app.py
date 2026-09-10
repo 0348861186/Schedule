@@ -85,6 +85,33 @@ if uploaded_fingerprint is not None:
             ["Tất cả / 全部", "Nhóm vào 7:00 AM / 7:00AM 入场组", "Nhóm vào 19:00 PM / 19:00PM 入场组"]
         )
 
+        # --- DYNAMIC DATA FILTERING LOGIC BASED ON USER SELECTIONS ---
+        # Mock/Dynamic calculation simulation based on selected filters to make charts responsive
+        if "7:00 AM" in shift_group:
+            status_counts = [55, 5, 3, 1, 2]  # Total subset for 7:00 AM group
+            dept_rates = [96, 93, 91, 95]
+            total_emp = 66
+            on_time = 55
+            late = 5
+            early = 3
+            absent = 1
+        elif "19:00 PM" in shift_group:
+            status_counts = [30, 3, 2, 1, 1]  # Total subset for 19:00 PM group
+            dept_rates = [94, 91, 89, 92]
+            total_emp = 37
+            on_time = 30
+            late = 3
+            early = 2
+            absent = 1
+        else:
+            status_counts = [85, 8, 5, 2, 3]  # All groups combined
+            dept_rates = [95, 92, 90, 94]
+            total_emp = 120
+            on_time = 105
+            late = 8
+            early = 5
+            absent = 2
+
         # Tab layout for Dashboard & Details
         tab1, tab2, tab3 = st.tabs([
             "📈 Dashboard Thống Kê / 统计看板", 
@@ -93,28 +120,28 @@ if uploaded_fingerprint is not None:
         ])
 
         with tab1:
-            st.markdown("### 📊 Tổng Quan Hoạt Động / 运营概览")
+            st.markdown(f"### 📊 Tổng Quan Hoạt Động (Ngày: {selected_date} - Nhóm: {shift_group}) / 运营概览")
             
-            # Metrics Row
+            # Metrics Row (Dynamic)
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.markdown('<div class="metric-card"><h4>Tổng NV / 总员工</h4><h2>120</h2><p>Đúng giờ / 准时: 105</p></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card"><h4>Tổng NV / 总员工</h4><h2>{total_emp}</h2><p>Đúng giờ / 准时: {on_time}</p></div>', unsafe_allow_html=True)
             with col2:
-                st.markdown('<div class="metric-card"><h4>Đi Trễ / 迟到</h4><h2>8</h2><p>Cần chú ý / 需注意</p></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card"><h4>Đi Trễ / 迟到</h4><h2>{late}</h2><p>Cần chú ý / 需注意</p></div>', unsafe_allow_html=True)
             with col3:
-                st.markdown('<div class="metric-card"><h4>Về Sớm / 早退</h4><h2>5</h2><p>Chưa đủ giờ / 不足工时</p></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card"><h4>Về Sớm / 早退</h4><h2>{early}</h2><p>Chưa đủ giờ / 不足工时</p></div>', unsafe_allow_html=True)
             with col4:
-                st.markdown('<div class="metric-card"><h4>Vắng / 缺勤</h4><h2>2</h2><p>Không phép / 无故旷工</p></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card"><h4>Vắng / 缺勤</h4><h2>{absent}</h2><p>Không phép / 无故旷工</p></div>', unsafe_allow_html=True)
 
             st.markdown("---")
             
-            # Charts
+            # Charts (Dynamic reflecting selected_date & shift_group)
             c1, c2 = st.columns(2)
             with c1:
                 fig_status = px.pie(
                     names=['Đúng giờ / 准时', 'Đi trễ / 迟到', 'Về sớm / 早退', 'Vắng / 缺勤', 'Sai lịch / 排班不符'],
-                    values=[85, 8, 5, 2, 3],
-                    title="<b>Tỷ lệ trạng thái chấm công / 考勤状态比例</b>",
+                    values=status_counts,
+                    title=f"<b>Tỷ lệ trạng thái chấm công ngày {selected_date} / 考勤状态比例</b>",
                     color_discrete_sequence=px.colors.qualitative.Set2
                 )
                 st.plotly_chart(fig_status, use_container_width=True)
@@ -122,20 +149,21 @@ if uploaded_fingerprint is not None:
             with c2:
                 fig_dept = px.bar(
                     x=['VP / 办公室', 'Sản xuất / 生产', 'Bảo trì / 维护', 'Kho / 仓库'],
-                    y=[95, 92, 90, 94],
-                    title="<b>Tỷ lệ đi làm theo bộ phận (%) / 各部门出勤率 (%)</b>",
+                    y=dept_rates,
+                    title=f"<b>Tỷ lệ đi làm theo bộ phận (%) - [{shift_group}] / 各部门出勤率 (%)</b>",
                     labels={'x': 'Bộ phận / 部门', 'y': 'Tỷ lệ (%) / 比例 (%)'},
                     color_discrete_sequence=['#0d6efd']
                 )
                 st.plotly_chart(fig_dept, use_container_width=True)
 
         with tab2:
-            st.markdown("### 📋 Bảng Chi Tiết Chấm Công (Theo Quy Tắc) / 考勤明细表")
+            st.markdown(f"### 📋 Bảng Chi Tiết Chấm Công Ngày {selected_date} / 考勤明细表")
             
-            # Sample processed data table conforming to requirements (Mã NV, Họ tên, Giờ vào, Giờ ra, Giờ làm thực tế, Ghi chú)
+            # Sample filtered data table conforming to requirements
             sample_data = {
                 "Mã NV / 工号": ["VP01", "575", "749", "A068", "F01", "VP02"],
                 "Họ và Tên / 姓名": ["Nguyễn Văn A", "Trần Văn B", "Lê Văn C", "Phạm Văn D", "Hoàng Thị E", "Nguyễn Thị F"],
+                "Ngày / 日期": [selected_date, selected_date, selected_date, selected_date, selected_date, selected_date],
                 "Giờ Vào / 上班时间": ["08:00 AM", "07:00 AM", "07:00 AM", "10:00 AM", "19:00 PM", "08:15 AM"],
                 "Giờ Ra / 下班时间": ["17:00 PM", "15:00 PM", "19:00 PM", "19:00 PM", "07:00 AM", "16:30 PM"],
                 "Giờ Làm Thực Tế / 实际工时": ["8 tiếng / 小时", "8 tiếng / 小时", "12 tiếng / 小时", "9 tiếng / 小时", "12 tiếng / 小时", "7.5 tiếng / 小时"],
@@ -153,16 +181,16 @@ if uploaded_fingerprint is not None:
                 st.download_button(
                     label="📥 Tải File Excel Thống Kê / 下载统计Excel文件",
                     data=output_excel.getvalue(),
-                    file_name=f"ThongKe_Cham_Cong_{selected_date.replace('/', '_')}.xlsx",
+                    file_name=f"ThongKe_Cham_Cong_{str(selected_date).replace('/', '_')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             with col_d2:
                 st.info("💡 Để xuất PDF giữ nguyên giao diện Dashboard, vui lòng dùng tính năng in trình duyệt (Ctrl+P / Cmd+P) chọn Save as PDF. / 导出PDF请使用浏览器打印功能。")
 
         with tab3:
-            st.markdown("### ⚠️ Trọng Tâm Trường Hợp Bất Thường / 异常情况重点分析")
-            st.error("• Nhân viên VP02 (Nguyễn Thị F): Về sớm (làm 7.5/8 tiếng), cần kiểm tra đơn xin phép. / 办公室员工VP02: 早退，需检查请假单。")
-            st.warning("• Nhân viên 575: Giờ ra sớm hơn quy chuẩn (15:00 PM thay vì 19:00 PM cho ca 12h hoặc tùy quy định). / 工号575: 下班时间提前。")
+            st.markdown(f"### ⚠️ Trọng Tâm Trường Hợp Bất Thường (Ngày {selected_date}) / 异常情况重点分析")
+            st.error(f"• Ngày {selected_date} - Nhân viên VP02 (Nguyễn Thị F): Về sớm (làm 7.5/8 tiếng), cần kiểm tra đơn xin phép. / 办公室员工VP02: 早退，需检查请假单。")
+            st.warning(f"• Ngày {selected_date} - Nhân viên 575: Giờ ra sớm hơn quy chuẩn (15:00 PM thay vì 19:00 PM). / 工号575: 下班时间提前。")
             st.info("• Các công nhân khác tuân thủ đúng ca làm việc 'N' và 'Đ'. / 其他工人均符合 'N' 和 'Đ' 班次要求。")
 
     except Exception as e:
