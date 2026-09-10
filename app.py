@@ -43,6 +43,7 @@ LANG = {
         'late_early': 'Trễ/Về sớm',
         'chart_title': 'Biểu đồ tình trạng đi làm theo Nhóm',
         'no_data': 'Vui lòng tải đủ file và cấu hình thông tin.',
+        'empty_result': 'Không có dữ liệu nhân sự để thống kê trong ngày này.',
     },
     'ZH': {
         'title': '员工出勤考勤管理与统计系统',
@@ -63,11 +64,12 @@ LANG = {
         'late_early': '迟到/早退',
         'chart_title': '各组别出勤状态分析图',
         'no_data': '请上传完整文件并配置文件信息。',
+        'empty_result': '当天没有可统计的人员数据。',
     }
 }
 
 # ==========================================
-# 3. HÀM TÌM CỘT LINH HOẠT (TRÁNH LỖI KEYERROR)
+# 3. HÀM TÌM CỘT LINH HOẠT
 # ==========================================
 def find_col(df, keywords):
     for col in df.columns:
@@ -83,14 +85,12 @@ def find_col(df, keywords):
 def process_attendance(df_finger, df_schedule, df_office, df_worker, target_date):
     df_finger_today = df_finger.copy()
     
-    # Tự động nhận diện tên cột quan trọng trong file vân tay
     col_date = find_col(df_finger_today, ['ngày', 'date', 'ngay'])
     col_id = find_col(df_finger_today, ['mã nv', 'ma nv', 'manv', 'code', 'id', 'mã'])
     col_in = find_col(df_finger_today, ['giờ vào', 'gio vao', 'vào', 'vao', 'in'])
     col_out = find_col(df_finger_today, ['giờ ra', 'gio ra', 'ra', 'out'])
     col_total = find_col(df_finger_today, ['tổng giờ', 'tong gio', 'total', 'giờ làm', 'gio lam'])
 
-    # Nếu tìm thấy cột ngày, tiến hành lọc theo ngày
     if col_date:
         try:
             df_finger_today['Parsed_Date'] = pd.to_datetime(df_finger_today[col_date], errors='coerce').dt.date
@@ -100,7 +100,6 @@ def process_attendance(df_finger, df_schedule, df_office, df_worker, target_date
 
     results = []
     
-    # Nhận diện cột mã NV trong file danh sách
     office_id_col = find_col(df_office, ['mã nv', 'ma nv', 'manv', 'code', 'id', 'mã']) if df_office is not None else None
     office_name_col = find_col(df_office, ['họ và tên', 'ho va ten', 'tên', 'ten', 'name']) if df_office is not None else None
     
@@ -130,7 +129,6 @@ def process_attendance(df_finger, df_schedule, df_office, df_worker, target_date
         name = emp['Tên']
         group = emp['Nhóm']
         
-        # Lọc quẹt thẻ của nhân viên này
         if col_id and not df_finger_today.empty:
             emp_finger = df_finger_today[df_finger_today[col_id].astype(str) == emp_id]
         else:
@@ -248,72 +246,74 @@ if file_finger and file_office:
 
     df_result = process_attendance(df_finger, df_schedule, df_office, df_worker, target_date)
 
-    st.header(f"📈 {lang['stats_section']}")
-    total_emp = len(df_result)
-    vắng_count = len(df_result[df_result['Ghi chú'].str.contains("Vắng|缺勤")]) if not df_result.empty else 0
-    bth_count = total_emp - vắng_count
-    
-    m1, m2, m3 = st.columns(3)
-    m1.metric(lang['total_emp'], total_emp)
-    m2.metric(lang['present'], bth_count)
-    m3.metric(lang['absent'], vắng_count)
+    if df_result.empty:
+        st.warning(lang['empty_result'])
+    else:
+        st.header(f"📈 {lang['stats_section']}")
+        total_emp = len(df_result)
+        vắng_count = len(df_result[df_result['Ghi chú'].str.contains("Vắng|缺勤")])
+        bth_count = total_emp - vắng_count
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric(lang['total_emp'], total_emp)
+        m2.metric(lang['present'], bth_count)
+        m3.metric(lang['absent'], vắng_count)
 
-    if not df_result.empty:
         fig = px.bar(df_result, x='Nhóm', color='Ghi chú',
                      title=lang['chart_title'],
                      barmode='stack', text_auto=True,
                      color_discrete_sequence=px.colors.qualitative.Pastel)
         st.plotly_chart(fig, use_container_width=True)
 
-    st.header(f"📋 {lang['report_section']}")
-    st.dataframe(df_result, use_container_width=True)
+        st.header(f"📋 {lang['report_section']}")
+        st.dataframe(df_result, use_container_width=True)
 
-    st.subheader("📥 Xuất dữ liệu / Export")
-    ex_col, pdf_col = st.columns(2)
+        st.subheader("📥 Xuất dữ liệu / Export")
+        ex_col, pdf_col = st.columns(2)
 
-    output_excel = io.BytesIO()
-    with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-        df_result[['Mã NV', 'Họ và tên', 'Giờ vào', 'Giờ ra', 'Giờ làm thực tế', 'Ghi chú']].to_excel(writer, index=False, sheet_name='Thống kê')
-    excel_data = output_excel.getvalue()
+        output_excel = io.BytesIO()
+        with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
+            df_result[['Mã NV', 'Họ và tên', 'Giờ vào', 'Giờ ra', 'Giờ làm thực tế', 'Ghi chú']].to_excel(writer, index=False, sheet_name='Thống kê')
+        excel_data = output_excel.getvalue()
 
-    with ex_col:
-        st.download_button(
-            label=lang['download_excel'],
-            data=excel_data,
-            file_name=f"Thong_ke_Nhan_vien_{target_date}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        with ex_col:
+            st.download_button(
+                label=lang['download_excel'],
+                data=excel_data,
+                file_name=f"Thong_ke_Nhan_vien_{target_date}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
-    output_pdf = io.BytesIO()
-    doc = SimpleDocTemplate(output_pdf, pagesize=letter)
-    styles = getSampleStyleSheet()
-    story = []
+        output_pdf = io.BytesIO()
+        doc = SimpleDocTemplate(output_pdf, pagesize=letter)
+        styles = getSampleStyleSheet()
+        story = []
 
-    story.append(Paragraph(f"{lang['title']}", styles['Title']))
-    story.append(Spacer(1, 12))
-    story.append(Paragraph(f"Ngày kiểm tra / 日期: {target_date}", styles['Normal']))
-    story.append(Paragraph(f"Tổng số nhân viên: {total_emp} | Đi làm: {bth_count} | Vắng: {vắng_count}", styles['Normal']))
-    story.append(Spacer(1, 20))
+        story.append(Paragraph(f"{lang['title']}", styles['Title']))
+        story.append(Spacer(1, 12))
+        story.append(Paragraph(f"Ngày kiểm tra / 日期: {target_date}", styles['Normal']))
+        story.append(Paragraph(f"Tổng số nhân viên: {total_emp} | Đi làm: {bth_count} | Vắng: {vắng_count}", styles['Normal']))
+        story.append(Spacer(1, 20))
 
-    pdf_data = [list(df_result.columns)] + df_result.values.tolist()
-    t = Table(pdf_data)
-    t.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.grey),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('BOTTOMPADDING', (0,0), (-1,0), 8),
-        ('GRID', (0,0), (-1,-1), 1, colors.black)
-    ]))
-    story.append(t)
-    doc.build(story)
-    pdf_data_bytes = output_pdf.getvalue()
+        pdf_data = [list(df_result.columns)] + df_result.values.tolist()
+        t = Table(pdf_data)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.grey),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('BOTTOMPADDING', (0,0), (-1,0), 8),
+            ('GRID', (0,0), (-1,-1), 1, colors.black)
+        ]))
+        story.append(t)
+        doc.build(story)
+        pdf_data_bytes = output_pdf.getvalue()
 
-    with pdf_col:
-        st.download_button(
-            label=lang['download_pdf'],
-            data=pdf_data_bytes,
-            file_name=f"Dashboard_Report_{target_date}.pdf",
-            mime="application/pdf"
-        )
+        with pdf_col:
+            st.download_button(
+                label=lang['download_pdf'],
+                data=pdf_data_bytes,
+                file_name=f"Dashboard_Report_{target_date}.pdf",
+                mime="application/pdf"
+            )
 else:
     st.info(lang['no_data'])
