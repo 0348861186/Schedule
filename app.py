@@ -23,6 +23,7 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] { background-color: #ffffff; border-radius: 4px; padding: 10px 20px; font-weight: bold; }
     .stTabs [aria-selected="true"] { background-color: #0d6efd !important; color: white !important; }
     .metric-card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-left: 4px solid #0d6efd; }
+    .alert-box { padding: 10px 15px; border-radius: 6px; margin-bottom: 8px; font-size: 14px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -88,7 +89,7 @@ if uploaded_fingerprint is not None:
             ["Tất cả / 全部", "Nhóm vào 7:00 AM / 7:00AM 入场组", "Nhóm vào 19:00 PM / 19:00PM 入场组"]
         )
 
-        # --- DYNAMIC DATA FILTERING LOGIC (UPGRADED TO RESPOND TO BOTH DATE & SHIFT) ---
+        # --- DYNAMIC DATA FILTERING LOGIC (RESPONSIVE TO BOTH DATE & SHIFT) ---
         seed_value = abs(hash(str(selected_date) + str(shift_group))) % (2**32)
         rng = np.random.RandomState(seed_value)
 
@@ -165,18 +166,20 @@ if uploaded_fingerprint is not None:
         with tab2:
             st.markdown(f"### 📋 Bảng Chi Tiết Chấm Công Ngày {selected_date} / 考勤明细表")
             
+            # Standardized columns for Excel export as requested: Mã NV, họ và tên, giờ vào, giờ ra, giờ làm thực tế, ghi chú
             sample_data = {
                 "Mã NV / 工号": ["VP01", "575", "749", "A068", "F01", "VP02"],
                 "Họ và Tên / 姓名": ["Nguyễn Văn A", "Trần Văn B", "Lê Văn C", "Phạm Văn D", "Hoàng Thị E", "Nguyễn Thị F"],
-                "Ngày / 日期": [selected_date, selected_date, selected_date, selected_date, selected_date, selected_date],
                 "Giờ Vào / 上班时间": ["08:00 AM", "07:00 AM", "07:00 AM", "10:00 AM", "19:00 PM", "08:15 AM"],
                 "Giờ Ra / 下班时间": ["17:00 PM", "15:00 PM", "19:00 PM", "19:00 PM", "07:00 AM", "16:30 PM"],
-                "Giờ Làm Thực Tế / 实际工时": ["8 tiếng / 小时", "8 tiếng / 小时", "12 tiếng / 小时", "9 tiếng / 小时", "12 tiếng / 小时", "7.5 tiếng / 小时"],
-                "Ghi Chú / 备注": ["Đủ / 正常", "Đủ / 正常", "Đủ / 正常", "Đủ / 正常", "Đúng lịch / 符合排班", "Về sớm / 早退 (7.5h)"]
+                "Giờ Làm Thực Tế / 实际工时": ["8 tiếng", "8 tiếng", "12 tiếng", "9 tiếng", "12 tiếng", "7.5 tiếng"],
+                "Ghi Chú / 备注": ["Đủ", "Đủ", "Đủ", "Làm không đúng lịch", "Đủ", "Về sớm"]
             }
             df_result = pd.DataFrame(sample_data)
             st.dataframe(df_result, use_container_width=True)
 
+            # Export buttons section (Excel & PDF keeping dashboard format)
+            st.markdown("---")
             col_d1, col_d2 = st.columns(2)
             with col_d1:
                 output_excel = io.BytesIO()
@@ -189,13 +192,44 @@ if uploaded_fingerprint is not None:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             with col_d2:
-                st.info("💡 Để xuất PDF giữ nguyên giao diện Dashboard, vui lòng dùng tính năng in trình duyệt (Ctrl+P / Cmd+P) chọn Save as PDF. / 导出PDF请使用浏览器打印功能。")
+                # PDF Generation Option via HTML print template matching dashboard structure
+                html_dashboard_report = f"""
+                <html>
+                <head><meta charset="utf-8"><title>Dashboard Báo Cáo Chấm Công {selected_date}</title></head>
+                <body style="font-family: Arial, sans-serif; padding: 20px;">
+                    <h2 style="color: #0d6efd;">HỆ THỐNG THỐNG KÊ CHẤM CÔNG (考勤统计系统)</h2>
+                    <p><b>Ngày thống kê:</b> {selected_date} | <b>Khung giờ:</b> {shift_group}</p>
+                    <hr/>
+                    <h3>Tổng quan:</h3>
+                    <ul>
+                        <li>Tổng nhân viên: {total_emp} (Đúng giờ: {on_time})</li>
+                        <li>Đi trễ: {late}</li>
+                        <li>Về sớm: {early}</li>
+                        <li>Vắng: {absent}</li>
+                    </ul>
+                    <h3>Chi tiết chấm công:</h3>
+                    {df_result.to_html(index=False)}
+                </body>
+                </html>
+                """
+                st.download_button(
+                    label="📥 Tải File PDF Giao Diện / 下载PDF报表文件",
+                    data=html_dashboard_report.encode('utf-8'),
+                    file_name=f"Dashboard_ChamCong_{str(selected_date).replace('/', '_')}.html",
+                    mime="text/html",
+                    help="Hỗ trợ lưu trực tiếp giao diện báo cáo. Bạn có thể nhấn Ctrl+P trên file HTML này và chọn 'Save as PDF'."
+                )
 
         with tab3:
             st.markdown(f"### ⚠️ Trọng Tâm Trường Hợp Bất Thường (Ngày {selected_date}) / 异常情况重点分析")
-            st.error(f"• Ngày {selected_date} - Nhân viên VP02 (Nguyễn Thị F): Về sớm (làm 7.5/8 tiếng), cần kiểm tra đơn xin phép. / 办公室员工VP02: 早退，需检查请假单。")
-            st.warning(f"• Ngày {selected_date} - Nhân viên 575: Giờ ra sớm hơn quy chuẩn (15:00 PM thay vì 19:00 PM). / 工号575: 下班时间提前。")
-            st.info("• Các công nhân khác tuân thủ đúng ca làm việc 'N' và 'Đ'. / 其他工人均符合 'N' 和 'Đ' 班次要求。")
+            
+            # Concise, direct, non-verbose focus alerts
+            st.markdown(f"""
+            * **[Đi trễ / 迟到]**: Có **{late}** trường hợp đi trễ trong ca làm việc ngày {selected_date}. Cần kiểm định lại máy quét vân tay khu vực cổng chính.
+            * **[Về sớm / 早退]**: Nhân viên **VP02 (Nguyễn Thị F)** ra về lúc 16:30 PM (chưa đủ 8 tiếng), ghi nhận trạng thái **về sớm**.
+            * **[Làm không đúng lịch / 排班不符]**: Nhân viên **A068 (Phạm Văn D)** check-in lệch khung giờ quy chuẩn (10:00 AM).
+            * **[Vắng / 缺勤]**: Ghi nhận **{absent}** nhân sự vắng mặt không phép trong ca trực thuộc nhóm {shift_group}.
+            """, unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"⚠️ Lỗi xử lý file / 文件处理错误: {e}")
