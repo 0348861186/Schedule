@@ -23,7 +23,6 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] { background-color: #ffffff; border-radius: 4px; padding: 10px 20px; font-weight: bold; }
     .stTabs [aria-selected="true"] { background-color: #0d6efd !important; color: white !important; }
     .metric-card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-left: 4px solid #0d6efd; }
-    .alert-box { padding: 10px 15px; border-radius: 6px; margin-bottom: 8px; font-size: 14px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -38,29 +37,13 @@ uploaded_schedule = st.sidebar.file_uploader("2. Lịch Xếp Ca / 排班表文�
 uploaded_vp = st.sidebar.file_uploader("3. Danh Sách Nhân Viên VP / 办公室员工名单", type=["xlsx", "xls", "csv"])
 uploaded_cn = st.sidebar.file_uploader("4. Danh Sách Công Nhân / 工人名单", type=["xlsx", "xls", "csv"])
 
-# Function to initialize Gemini and clean/map columns intelligently if needed
-def smart_column_mapping_with_gemini(df_sample_columns, file_type_name, api_key_val):
-    if not api_key_val:
-        return None
-    try:
-        genai.configure(api_key=api_key_val)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = (
-            f"Bạn là trợ lý dữ liệu. Hãy phân tích các tiêu đề cột sau của file '{file_type_name}': {list(df_sample_columns)}. "
-            f"Hãy trả về định dạng JSON ánh xạ các cột chuẩn (ma_nv, ho_ten, ngay, gio_vao, gio_ra, thu, phong_ban) với tiêu đề thực tế tương ứng."
-        )
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return str(e)
-
 # Main Title bilingual
 st.title("📊 HỆ THỐNG THỐNG KÊ VÀ KIỂM TRA CHẤM CÔNG")
 st.markdown("<h3 style='color: #6c757d;'>考勤统计与检查系统 (Dashboard Song Ngữ Trung - Việt)</h3>", unsafe_allow_html=True)
 
 if uploaded_fingerprint is not None:
-    # Read files
     try:
+        # Đọc file bấm vân tay
         df_fp = pd.read_excel(uploaded_fingerprint) if uploaded_fingerprint.name.endswith(('xlsx', 'xls')) else pd.read_csv(uploaded_fingerprint)
         df_sc = pd.read_excel(uploaded_schedule) if uploaded_schedule and uploaded_schedule.name.endswith(('xlsx', 'xls')) else (pd.read_csv(uploaded_schedule) if uploaded_schedule else pd.DataFrame())
         df_vp = pd.read_excel(uploaded_vp) if uploaded_vp and uploaded_vp.name.endswith(('xlsx', 'xls')) else (pd.read_csv(uploaded_vp) if uploaded_vp else pd.DataFrame())
@@ -68,58 +51,100 @@ if uploaded_fingerprint is not None:
 
         st.success("✅ Tải dữ liệu thành công! / 数据加载成功！")
 
-        # Sidebar Controls for Date, Shift Group & Search
+        # --- TỰ ĐỘNG NHẬN DIỆN CỘT TRONG FILE VÂN TAY ---
+        cols_lower = {str(c).lower(): c for c in df_fp.columns}
+        
+        # Tìm cột Ngày
+        date_key = next((cols_lower[k] for k in cols_lower if any(x in k for x in ['ngay', 'date', 'ngày'])), df_fp.columns[0])
+        # Tìm cột Mã NV
+        id_key = next((cols_lower[k] for k in cols_lower if any(x in k for x in ['ma', 'id', 'code', 'nhan_vien', 'mã'])), df_fp.columns[0])
+        # Tìm cột Họ Tên
+        name_key = next((cols_lower[k] for k in cols_lower if any(x in k for x in ['ten', 'name', 'họ', 'ho_ten'])), None)
+        # Tìm cột Giờ vào / Giờ ra / Thời gian
+        time_key = next((cols_lower[k] for k in cols_lower if any(x in k for x in ['gio', 'time', 'thoi_gian', 'giờ'])), None)
+
+        # Chuẩn hóa định dạng ngày để lọc
+        df_fp['Clean_Date'] = pd.to_datetime(df_fp[date_key], errors='coerce').dt.strftime('%d/%m/%Y').fillna(df_fp[date_key].astype(str))
+
+        # Sidebar Controls
         st.sidebar.markdown("---")
         st.sidebar.header("⚙️ Tùy chọn lọc / 筛选选项")
         
-        # Date selection upgrade: dropdown from file columns or intuitive date_input picker
-        date_col = [c for c in df_fp.columns if any(k in str(c).lower() for k in ['ngay', 'date', 'ngày', 'time', 'gio'])]
-        if date_col:
-            df_fp[date_col[0]] = pd.to_datetime(df_fp[date_col[0]], errors='coerce').dt.strftime('%d/%m/%Y').fillna(df_fp[date_col[0]].astype(str))
-            unique_dates = sorted(df_fp[date_col[0]].dropna().unique())
-            selected_date = st.sidebar.selectbox("Chọn ngày kiểm tra / 选择检查日期", unique_dates)
-        else:
-            default_date = datetime.today().date()
-            picked_date = st.sidebar.date_input("Chọn ngày / 选择日期", default_date)
-            selected_date = picked_date.strftime("%d/%m/%Y")
+        unique_dates = sorted(df_fp['Clean_Date'].dropna().unique())
+        selected_date = st.sidebar.selectbox("Chọn ngày kiểm tra / 选择检查日期", unique_dates if len(unique_dates) > 0 else ["01/01/2026"])
 
-        # Shift group dropdown
         shift_group = st.sidebar.selectbox(
             "Chọn khung giờ thống kê / 选择统计时段",
             ["Tất cả / 全部", "Nhóm vào 7:00 AM / 7:00AM 入场组", "Nhóm vào 19:00 PM / 19:00PM 入场组"]
         )
 
-        # --- DYNAMIC DATA FILTERING LOGIC (RESPONSIVE TO BOTH DATE & SHIFT) ---
-        seed_value = abs(hash(str(selected_date) + str(shift_group))) % (2**32)
-        rng = np.random.RandomState(seed_value)
+        # --- XỬ LÝ DỮ LIỆU THỰC TẾ TỪ FILE THEO NGÀY ĐƯỢC CHỌN ---
+        df_filtered_date = df_fp[df_fp['Clean_Date'] == selected_date].copy()
 
-        if "7:00 AM" in shift_group:
-            base_total = rng.randint(60, 70)
-            late = rng.randint(3, 8)
-            early = rng.randint(2, 5)
-            absent = rng.randint(0, 3)
-            on_time = base_total - (late + early + absent)
-            status_counts = [on_time, late, early, absent, rng.randint(1, 3)]  
-            dept_rates = [rng.randint(90, 99), rng.randint(88, 96), rng.randint(85, 94), rng.randint(90, 98)]
-            total_emp = base_total
-        elif "19:00 PM" in shift_group:
-            base_total = rng.randint(30, 45)
-            late = rng.randint(2, 6)
-            early = rng.randint(1, 4)
-            absent = rng.randint(0, 2)
-            on_time = base_total - (late + early + absent)
-            status_counts = [on_time, late, early, absent, rng.randint(1, 3)]  
-            dept_rates = [rng.randint(88, 97), rng.randint(85, 95), rng.randint(83, 92), rng.randint(87, 95)]
-            total_emp = base_total
+        # Gom nhóm theo nhân viên để tính Giờ Vào (min) và Giờ Ra (max) thực tế từ file
+        if not df_filtered_date.empty and time_key:
+            df_filtered_date[time_key] = pd.to_datetime(df_filtered_date[time_key], errors='coerce')
+            grouped = df_filtered_date.groupby(id_key).agg(
+                gio_vao=(time_key, 'min'),
+                gio_ra=(time_key, 'max')
+            ).reset_index()
+            
+            # Gắn thêm tên nếu có
+            if name_key:
+                id_to_name = df_filtered_date.set_index(id_key)[name_key].to_dict()
+                grouped['ho_ten'] = grouped[id_key].map(id_to_name)
+            else:
+                grouped['ho_ten'] = "Nhân viên " + grouped[id_key].astype(str)
+                
+            # Tính toán giờ làm thực tế & gán ghi chú tự động
+            records = []
+            for _, row in grouped.iterrows():
+                in_t = row['gio_vao']
+                out_t = row['gio_ra']
+                
+                if pd.notnull(in_t) and pd.notnull(out_t):
+                    diff_hours = (out_t - in_t).total_seconds() / 3600
+                    gio_vao_str = in_t.strftime('%H:%M %p')
+                    gio_ra_str = out_t.strftime('%H:%M %p')
+                    gio_lam_str = f"{round(diff_hours, 1)} tiếng"
+                    
+                    # Logic đánh giá ghi chú
+                    if in_t.hour > 8:
+                        ghi_chu = "Đi trễ"
+                    elif diff_hours < 7.5:
+                        ghi_chu = "Về sớm"
+                    elif diff_hours > 14:
+                        ghi_chu = "Làm không đúng lịch"
+                    else:
+                        ghi_chu = "Đủ"
+                else:
+                    gio_vao_str = "--:--"
+                    gio_ra_str = "--:--"
+                    gio_lam_str = "0 tiếng"
+                    ghi_chu = "Vắng"
+
+                records.append({
+                    "Mã NV / 工号": row[id_key],
+                    "Họ và Tên / 姓名": row['ho_ten'],
+                    "Giờ Vào / 上班时间": gio_vao_str,
+                    "Giờ Ra / 下班时间": gio_ra_str,
+                    "Giờ Làm Thực Tế / 实际工时": gio_lam_str,
+                    "Ghi Chú / 备注": ghi_chu
+                })
+            df_result = pd.DataFrame(records)
         else:
-            base_total = rng.randint(100, 130)
-            late = rng.randint(5, 12)
-            early = rng.randint(3, 8)
-            absent = rng.randint(1, 4)
-            on_time = base_total - (late + early + absent)
-            status_counts = [on_time, late, early, absent, rng.randint(2, 5)]  
-            dept_rates = [rng.randint(91, 99), rng.randint(89, 96), rng.randint(86, 95), rng.randint(90, 98)]
-            total_emp = base_total
+            # Fallback nếu file trống hoặc không tìm thấy cột thời gian phù hợp
+            df_result = pd.DataFrame(columns=["Mã NV / 工号", "Họ và Tên / 姓名", "Giờ Vào / 上班时间", "Giờ Ra / 下班时间", "Giờ Làm Thực Tế / 实际工时", "Ghi Chú / 备注"])
+
+        # Thống kê số liệu thực tế dựa trên DataFrame đã xử lý
+        total_emp = len(df_result)
+        late = len(df_result[df_result["Ghi Chú / 备注"] == "Đi trễ"]) if not df_result.empty else 0
+        early = len(df_result[df_result["Ghi Chú / 备注"] == "Về sớm"]) if not df_result.empty else 0
+        absent = len(df_result[df_result["Ghi Chú / 备注"] == "Vắng"]) if not df_result.empty else 0
+        on_time = total_emp - (late + early + absent)
+        
+        status_counts = [max(on_time, 0), late, early, absent, len(df_result[df_result["Ghi Chú / 备注"] == "Làm không đúng lịch"])]
+        dept_rates = [95, 92, 90, 94] # Tỉ lệ minh họa theo bộ phận
 
         # Tab layout for Dashboard & Details
         tab1, tab2, tab3 = st.tabs([
@@ -165,20 +190,8 @@ if uploaded_fingerprint is not None:
 
         with tab2:
             st.markdown(f"### 📋 Bảng Chi Tiết Chấm Công Ngày {selected_date} / 考勤明细表")
-            
-            # Standardized columns for Excel export as requested: Mã NV, họ và tên, giờ vào, giờ ra, giờ làm thực tế, ghi chú
-            sample_data = {
-                "Mã NV / 工号": ["VP01", "575", "749", "A068", "F01", "VP02"],
-                "Họ và Tên / 姓名": ["Nguyễn Văn A", "Trần Văn B", "Lê Văn C", "Phạm Văn D", "Hoàng Thị E", "Nguyễn Thị F"],
-                "Giờ Vào / 上班时间": ["08:00 AM", "07:00 AM", "07:00 AM", "10:00 AM", "19:00 PM", "08:15 AM"],
-                "Giờ Ra / 下班时间": ["17:00 PM", "15:00 PM", "19:00 PM", "19:00 PM", "07:00 AM", "16:30 PM"],
-                "Giờ Làm Thực Tế / 实际工时": ["8 tiếng", "8 tiếng", "12 tiếng", "9 tiếng", "12 tiếng", "7.5 tiếng"],
-                "Ghi Chú / 备注": ["Đủ", "Đủ", "Đủ", "Làm không đúng lịch", "Đủ", "Về sớm"]
-            }
-            df_result = pd.DataFrame(sample_data)
             st.dataframe(df_result, use_container_width=True)
 
-            # Export buttons section (Excel & PDF keeping dashboard format)
             st.markdown("---")
             col_d1, col_d2 = st.columns(2)
             with col_d1:
@@ -192,7 +205,6 @@ if uploaded_fingerprint is not None:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             with col_d2:
-                # PDF Generation Option via HTML print template matching dashboard structure
                 html_dashboard_report = f"""
                 <html>
                 <head><meta charset="utf-8"><title>Dashboard Báo Cáo Chấm Công {selected_date}</title></head>
@@ -216,20 +228,21 @@ if uploaded_fingerprint is not None:
                     label="📥 Tải File PDF Giao Diện / 下载PDF报表文件",
                     data=html_dashboard_report.encode('utf-8'),
                     file_name=f"Dashboard_ChamCong_{str(selected_date).replace('/', '_')}.html",
-                    mime="text/html",
-                    help="Hỗ trợ lưu trực tiếp giao diện báo cáo. Bạn có thể nhấn Ctrl+P trên file HTML này và chọn 'Save as PDF'."
+                    mime="text/html"
                 )
 
         with tab3:
             st.markdown(f"### ⚠️ Trọng Tâm Trường Hợp Bất Thường (Ngày {selected_date}) / 异常情况重点分析")
             
-            # Concise, direct, non-verbose focus alerts
-            st.markdown(f"""
-            * **[Đi trễ / 迟到]**: Có **{late}** trường hợp đi trễ trong ca làm việc ngày {selected_date}. Cần kiểm định lại máy quét vân tay khu vực cổng chính.
-            * **[Về sớm / 早退]**: Nhân viên **VP02 (Nguyễn Thị F)** ra về lúc 16:30 PM (chưa đủ 8 tiếng), ghi nhận trạng thái **về sớm**.
-            * **[Làm không đúng lịch / 排班不符]**: Nhân viên **A068 (Phạm Văn D)** check-in lệch khung giờ quy chuẩn (10:00 AM).
-            * **[Vắng / 缺勤]**: Ghi nhận **{absent}** nhân sự vắng mặt không phép trong ca trực thuộc nhóm {shift_group}.
-            """, unsafe_allow_html=True)
+            # Lọc các trường hợp bất thường từ dữ liệu thực tế
+            abnormal_df = df_result[df_result["Ghi Chú / 备注"] != "Đủ"]
+            if not abnormal_df.empty:
+                for _, row in abnormal_df.iterrows():
+                    st.markdown(f"""
+                    * **[{row['Ghi Chú / 备注']}]**: Nhân viên **{row['Mã NV / 工号']} - {row['Họ và Tên / 姓名']}** (Vào: {row['Giờ Vào / 上班时间']}, Ra: {row['Giờ Ra / 下班时间']}).
+                    """, unsafe_allow_html=True)
+            else:
+                st.success("Không ghi nhận trường hợp bất thường nào trong ngày được chọn. / 所选日期无异常情况。")
 
     except Exception as e:
         st.error(f"⚠️ Lỗi xử lý file / 文件处理错误: {e}")
