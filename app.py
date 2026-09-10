@@ -56,6 +56,21 @@ if uploaded_fingerprint is not None:
         if possible_name_cols:
             df_fp.rename(columns={possible_name_cols[0]: "Họ và tên"}, inplace=True)
 
+        # --- BỔ SUNG: TỰ ĐỘNG NHẬN DIỆN VÀ LỌC THEO NGÀY THÁNG NĂM ---
+        possible_date_cols = [c for c in df_fp.columns if 'ngày' in str(c).lower() or 'date' in str(c).lower() or 'thời gian' in str(c).lower() or 'time' in str(c).lower()]
+        
+        if possible_date_cols:
+            date_col = possible_date_cols[0]
+            # Chuyển đổi cột ngày sang kiểu datetime để so khớp
+            df_fp[date_col] = pd.to_datetime(df_fp[date_col], errors='coerce')
+            
+            # Lọc dữ liệu theo đúng Ngày - Tháng - Năm được chọn trên sidebar
+            df_fp = df_fp[
+                (df_fp[date_col].dt.day == selected_day) & 
+                (df_fp[date_col].dt.month == selected_month) & 
+                (df_fp[date_col].dt.year == selected_year)
+            ]
+
         st.success("✅ Đã đọc dữ liệu thực tế thành công! / 数据加载成功！")
 
         def process_row(row):
@@ -85,7 +100,8 @@ if uploaded_fingerprint is not None:
 
             return pd.Series([nhóm, ghi_chu], index=["Nhóm", "Ghi chú"])
 
-        if "Mã NV" in df_fp.columns:
+        # Kiểm tra nếu sau khi lọc mà dữ liệu trống
+        if not df_fp.empty and "Mã NV" in df_fp.columns:
             df_fp[["Nhóm", "Ghi chú"]] = df_fp.apply(process_row, axis=1)
             
             if "Họ và tên" not in df_fp.columns:
@@ -100,7 +116,7 @@ if uploaded_fingerprint is not None:
             result_df["Ghi chú"] = df_fp["Ghi chú"]
             result_df["Nhóm"] = df_fp["Nhóm"]
         else:
-            # Dữ liệu dự phòng nếu file không có cột Mã NV
+            # Dữ liệu dự phòng nếu file không có dữ liệu ngày được chọn hoặc không tìm thấy cột Mã NV
             result_df = pd.DataFrame([
                 {"Mã NV": "673", "Họ và tên": "Nguyễn Văn A", "Giờ vào": "07:00", "Giờ ra": "19:00", "Giờ làm thực tế": 12.0, "Ghi chú": "Đúng giờ / 准时", "Nhóm": "Bảo trì / 保养"},
                 {"Mã NV": "749", "Họ và tên": "Trần Thị B", "Giờ vào": "07:15", "Giờ ra": "19:00", "Giờ làm thực tế": 11.75, "Ghi chú": "đi trễ / 迟到", "Nhóm": "QC"},
@@ -108,6 +124,8 @@ if uploaded_fingerprint is not None:
                 {"Mã NV": "VP01", "Họ và tên": "Phạm Văn D", "Giờ vào": "08:00", "Giờ ra": "16:00", "Giờ làm thực tế": 7.0, "Ghi chú": "về sớm / 早退", "Nhóm": "Văn phòng / 办公室"},
                 {"Mã NV": "CN01", "Họ và tên": "Hoàng Thị E", "Giờ vào": "", "Giờ ra": "", "Giờ làm thực tế": 0.0, "Ghi chú": "Vắng / 缺勤", "Nhóm": "Công nhân / 工人"}
             ])
+            if possible_date_cols and df_fp.empty:
+                st.warning(f"⚠️ Không tìm thấy dữ liệu chấm công cho ngày {selected_day}/{selected_month}/{selected_year}. Đang hiển thị dữ liệu mẫu. / 该日期无数据，显示示例数据。")
 
         total_nv = len(result_df)
         total_dung_gio = len(result_df[result_df["Ghi chú"].str.contains("Đúng giờ|准时", case=False, na=False)])
@@ -128,15 +146,13 @@ if uploaded_fingerprint is not None:
         chart_col1, chart_col2 = st.columns(2)
         
         with chart_col1:
-            # Xử lý gom nhóm an toàn cho mọi phiên bản Pandas
             df_status_counts = result_df["Ghi chú"].value_counts().rename_axis('Trạng thái').reset_index(name='Số lượng')
-            fig_pie = px.pie(df_status_counts, names="Trạng thái", values="Số lượng", title="Tỷ lệ trạng thái đi làm / 出勤状态比例", hole=0.4)
+            fig_pie = px.pie(df_status_counts, names="Trạng thái", values="Số lượng", title=f"Tỷ lệ trạng thái đi làm ({selected_day}/{selected_month}) / 出勤状态比例", hole=0.4)
             st.plotly_chart(fig_pie, use_container_width=True)
             
         with chart_col2:
-            # Xử lý gom nhóm an toàn cho biểu đồ cột
             df_group_counts = result_df["Nhóm"].value_counts().rename_axis('Nhóm').reset_index(name='Số lượng')
-            fig_bar = px.bar(df_group_counts, x="Nhóm", y="Số lượng", title="Số lượng nhân viên theo nhóm / 各组出勤人数", labels={"Nhóm": "Nhóm / 组别", "Số lượng": "Số lượng / 数量"}, color="Nhóm")
+            fig_bar = px.bar(df_group_counts, x="Nhóm", y="Số lượng", title=f"Số lượng nhân viên theo nhóm ({selected_day}/{selected_month}) / 各组出勤人数", labels={"Nhóm": "Nhóm / 组别", "Số lượng": "Số lượng / 数量"}, color="Nhóm")
             st.plotly_chart(fig_bar, use_container_width=True)
 
         st.markdown("---")
