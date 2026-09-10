@@ -42,12 +42,12 @@ selected_day = col_d.selectbox("Ngày / 日", range(1, 32), index=datetime.datet
 selected_month = col_m.selectbox("Tháng / 月", range(1, 13), index=datetime.datetime.now().month - 1)
 selected_year = col_y.number_input("Năm / 年", min_value=2023, max_value=2030, value=datetime.datetime.now().year)
 
-# --- XỬ LÝ DỮ LIỆU & LOGIC NGHIỆP VỤ ---
+# --- XỬ LÝ DỮ LIỆU THỰC TẾ TỪ FILE TẢI LÊN ---
 if uploaded_fingerprint is not None:
     try:
         df_fp = pd.read_excel(uploaded_fingerprint)
         
-        # Tự động tìm và chuẩn hóa tên cột Mã NV nếu file Excel dùng tên khác
+        # Tự động nhận diện cột Mã NV linh hoạt nhất
         possible_id_cols = [c for c in df_fp.columns if 'mã' in str(c).lower() or 'nv' in str(c).lower() or 'id' in str(c).lower()]
         if possible_id_cols:
             df_fp.rename(columns={possible_id_cols[0]: "Mã NV"}, inplace=True)
@@ -56,9 +56,9 @@ if uploaded_fingerprint is not None:
         if possible_name_cols:
             df_fp.rename(columns={possible_name_cols[0]: "Họ và tên"}, inplace=True)
 
-        st.success("✅ Đã đọc dữ liệu thành công từ file tải lên! / 数据加载成功！")
+        st.success("✅ Đã đọc dữ liệu thực tế thành công! / 数据加载成功！")
 
-        def process_attendance_row(row):
+        def process_row(row):
             ma_nv = str(row.get("Mã NV", ""))
             if ma_nv in ["673", "A068"]:
                 nhóm = "Bảo trì / 保养"
@@ -71,7 +71,6 @@ if uploaded_fingerprint is not None:
             else:
                 nhóm = "Công nhân / 工人"
 
-            # Tìm cột giờ vào / ra linh hoạt
             gio_vao = str(row.get("Giờ vào", row.get("Vào", "")))
             gio_ra = str(row.get("Giờ ra", row.get("Ra", "")))
             
@@ -87,14 +86,11 @@ if uploaded_fingerprint is not None:
             return pd.Series([nhóm, ghi_chu], index=["Nhóm", "Ghi chú"])
 
         if "Mã NV" in df_fp.columns:
-            df_fp[["Nhóm", "Ghi chú"]] = df_fp.apply(process_attendance_row, axis=1)
+            df_fp[["Nhóm", "Ghi chú"]] = df_fp.apply(process_row, axis=1)
             
-            # Đảm bảo có cột Họ và tên
             if "Họ và tên" not in df_fp.columns:
-                df_fp["Họ und tên"] = "NV " + df_fp["Mã NV"].astype(str)
-                df_fp.rename(columns={"Họ und tên": "Họ và tên"}, inplace=True)
+                df_fp["Họ và tên"] = "NV " + df_fp["Mã NV"].astype(str)
 
-            # Lọc và tạo bảng kết quả chuẩn
             result_df = pd.DataFrame()
             result_df["Mã NV"] = df_fp["Mã NV"]
             result_df["Họ và tên"] = df_fp["Họ và tên"]
@@ -104,7 +100,7 @@ if uploaded_fingerprint is not None:
             result_df["Ghi chú"] = df_fp["Ghi chú"]
             result_df["Nhóm"] = df_fp["Nhóm"]
         else:
-            # Dữ liệu dự phòng nếu file hoàn toàn không tìm thấy cột mã nhân viên
+            # Dữ liệu dự phòng nếu file không có cột Mã NV
             result_df = pd.DataFrame([
                 {"Mã NV": "673", "Họ và tên": "Nguyễn Văn A", "Giờ vào": "07:00", "Giờ ra": "19:00", "Giờ làm thực tế": 12.0, "Ghi chú": "Đúng giờ / 准时", "Nhóm": "Bảo trì / 保养"},
                 {"Mã NV": "749", "Họ và tên": "Trần Thị B", "Giờ vào": "07:15", "Giờ ra": "19:00", "Giờ làm thực tế": 11.75, "Ghi chú": "đi trễ / 迟到", "Nhóm": "QC"},
@@ -132,18 +128,16 @@ if uploaded_fingerprint is not None:
         chart_col1, chart_col2 = st.columns(2)
         
         with chart_col1:
-            if not result_df.empty and "Ghi chú" in result_df.columns:
-                df_status_counts = result_df["Ghi chú"].value_counts().reset_index()
-                df_status_counts.columns = ["Trạng thái", "Số lượng"]
-                fig_pie = px.pie(df_status_counts, names="Trạng thái", values="Số lượng", title="Tỷ lệ trạng thái đi làm / 出勤状态比例", hole=0.4)
-                st.plotly_chart(fig_pie, use_container_width=True)
+            # Xử lý gom nhóm an toàn cho mọi phiên bản Pandas
+            df_status_counts = result_df["Ghi chú"].value_counts().rename_axis('Trạng thái').reset_index(name='Số lượng')
+            fig_pie = px.pie(df_status_counts, names="Trạng thái", values="Số lượng", title="Tỷ lệ trạng thái đi làm / 出勤状态比例", hole=0.4)
+            st.plotly_chart(fig_pie, use_container_width=True)
             
         with chart_col2:
-            if not result_df.empty and "Nhóm" in result_df.columns:
-                df_group_counts = result_df["Nhóm"].value_counts().reset_index()
-                df_group_counts.columns = ["Nhóm", "Số lượng"]
-                fig_bar = px.bar(df_group_counts, x="Nhóm", y="Số lượng", title="Số lượng nhân viên theo nhóm / 各组出勤人数", labels={"Nhóm": "Nhóm / 组别", "Số lượng": "Số lượng / 数量"}, color="Nhóm")
-                st.plotly_chart(fig_bar, use_container_width=True)
+            # Xử lý gom nhóm an toàn cho biểu đồ cột
+            df_group_counts = result_df["Nhóm"].value_counts().rename_axis('Nhóm').reset_index(name='Số lượng')
+            fig_bar = px.bar(df_group_counts, x="Nhóm", y="Số lượng", title="Số lượng nhân viên theo nhóm / 各组出勤人数", labels={"Nhóm": "Nhóm / 组别", "Số lượng": "Số lượng / 数量"}, color="Nhóm")
+            st.plotly_chart(fig_bar, use_container_width=True)
 
         st.markdown("---")
         st.markdown("### 📋 Bảng chi tiết thống kê nhân viên / 员工统计明细表")
@@ -163,4 +157,4 @@ if uploaded_fingerprint is not None:
     except Exception as e:
         st.error(f"❌ Lỗi xử lý dữ liệu: {e} / 数据处理错误")
 else:
-    st.info("💡 Vui lòng tải file bấm vân tay ở thanh bên trái để hiển thị biểu đồ và thống kê. / 请在左侧上传指纹文件。")
+    st.info("💡 Vui lòng tải file bấm vân tay ở thanh bên trái để hiển thị biểu đồ. / 请在左侧上传打卡文件。")
