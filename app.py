@@ -67,81 +67,74 @@ LANG = {
 }
 
 # ==========================================
-# 3. LỚP XỬ LÝ THÔNG MINH BẰNG HỆ THỐNG PHÂN TÍCH (ẨN DANH)
+# 3. HÀM TÌM CỘT LINH HOẠT (TRÁNH LỖI KEYERROR)
 # ==========================================
-def smart_parse_columns(df, expected_cols, file_description):
-    """
-    Sử dụng mô hình phân tích tự động và đồng nhất tiêu đề cột nếu Python quét không khớp.
-    """
-    if client is None:
-        return {col: col for col in expected_cols if col in df.columns}
-        
-    sample_data = df.head(3).to_string()
-    prompt = f"""
-    Bạn là một chuyên gia xử lý dữ liệu. Hệ thống cần tìm các cột tương ứng với danh sách mục tiêu: {expected_cols}.
-    Dưới đây là các cột thực tế và một ít dữ liệu mẫu của file '{file_description}':
-    Các cột thực tế: {list(df.columns)}
-    Dữ liệu mẫu:
-    {sample_data}
-    
-    Hãy trả về một JSON duy nhất map từ tên cột mục tiêu sang tên cột thực tế chính xác nhất. 
-    Ví dụ: {{"Mã NV": "Mã nhân viên thực tế", "Giờ vào": "Giờ vào thực tế"}}
-    Chỉ trả ra JSON, không viết thêm lời thoại nào khác.
-    """
-    try:
-        response = client.models.generate_content(
-           model='gemini-2.5-flash',
-           contents=prompt,
-           config=types.GenerateContentConfig(response_mime_type="application/json")
-        )
-        mapping = json.loads(response.text.strip())
-        return mapping
-    except Exception:
-        return {col: col for col in expected_cols if col in df.columns}
+def find_col(df, keywords):
+    for col in df.columns:
+        col_lower = str(col).lower()
+        for kw in keywords:
+            if kw in col_lower:
+                return col
+    return None
 
 # ==========================================
 # 4. HÀM XỬ LÝ LOGIC TÍNH TOÁN THEO QUY TẮC
 # ==========================================
 def process_attendance(df_finger, df_schedule, df_office, df_worker, target_date):
-    finger_map = {'Mã NV': 'Mã NV', 'Ngày': 'Ngày', 'Giờ vào': 'Giờ vào', 'Giờ ra': 'Giờ ra', 'Tổng giờ': 'Tổng giờ'}
-    
     df_finger_today = df_finger.copy()
     
-    try:
-       df_finger_today['Ngày'] = pd.to_datetime(df_finger_today['Ngày']).dt.date
-    except:
-       pass
-        
-    df_finger_today = df_finger_today[df_finger_today['Ngày'] == target_date]
-    
+    # Tự động nhận diện tên cột quan trọng trong file vân tay
+    col_date = find_col(df_finger_today, ['ngày', 'date', 'ngay'])
+    col_id = find_col(df_finger_today, ['mã nv', 'ma nv', 'manv', 'code', 'id', 'mã'])
+    col_in = find_col(df_finger_today, ['giờ vào', 'gio vao', 'vào', 'vao', 'in'])
+    col_out = find_col(df_finger_today, ['giờ ra', 'gio ra', 'ra', 'out'])
+    col_total = find_col(df_finger_today, ['tổng giờ', 'tong gio', 'total', 'giờ làm', 'gio lam'])
+
+    # Nếu tìm thấy cột ngày, tiến hành lọc theo ngày
+    if col_date:
+        try:
+            df_finger_today['Parsed_Date'] = pd.to_datetime(df_finger_today[col_date], errors='coerce').dt.date
+            df_finger_today = df_finger_today[df_finger_today['Parsed_Date'] == target_date]
+        except:
+            pass
+
     results = []
     
-    office_ids = df_office['Mã NV'].astype(str).tolist() if df_office is not None else []
-    worker_ids = df_worker['Mã NV'].astype(str).tolist() if df_worker is not None else []
+    # Nhận diện cột mã NV trong file danh sách
+    office_id_col = find_col(df_office, ['mã nv', 'ma nv', 'manv', 'code', 'id', 'mã']) if df_office is not None else None
+    office_name_col = find_col(df_office, ['họ và tên', 'ho va ten', 'tên', 'ten', 'name']) if df_office is not None else None
     
+    worker_id_col = find_col(df_worker, ['mã nv', 'ma nv', 'manv', 'code', 'id', 'mã']) if df_worker is not None else None
+    worker_name_col = find_col(df_worker, ['họ và tên', 'ho va ten', 'tên', 'ten', 'name']) if df_worker is not None else None
+
     maintenance_ids = ['673', 'A068']
     qc_ids = ['749', '949']
     cleaner_ids = ['575']
     
     all_employees = []
-    if df_office is not None:
+    if df_office is not None and office_id_col:
         for idx, row in df_office.iterrows():
-            all_employees.append({'Mã NV': str(row['Mã NV']), 'Tên': row.get('Họ và tên', 'N/A'), 'Nhóm': 'VP'})
-    if df_worker is not None:
+            all_employees.append({'Mã NV': str(row[office_id_col]), 'Tên': row.get(office_name_col, 'N/A') if office_name_col else 'N/A', 'Nhóm': 'VP'})
+            
+    if df_worker is not None and worker_id_col:
         for idx, row in df_worker.iterrows():
-            emp_id = str(row['Mã NV'])
+            emp_id = str(row[worker_id_col])
             group = 'Công nhân'
             if emp_id in maintenance_ids: group = 'Bảo trì'
             elif emp_id in qc_ids: group = 'QC'
             elif emp_id in cleaner_ids: group = 'Tạp vụ'
-            all_employees.append({'Mã NV': emp_id, 'Tên': row.get('Họ và tên', 'N/A'), 'Nhóm': group})
+            all_employees.append({'Mã NV': emp_id, 'Tên': row.get(worker_name_col, 'N/A') if worker_name_col else 'N/A', 'Nhóm': group})
 
     for emp in all_employees:
         emp_id = emp['Mã NV']
         name = emp['Tên']
         group = emp['Nhóm']
         
-        emp_finger = df_finger_today[df_finger_today['Mã NV'].astype(str) == emp_id]
+        # Lọc quẹt thẻ của nhân viên này
+        if col_id and not df_finger_today.empty:
+            emp_finger = df_finger_today[df_finger_today[col_id].astype(str) == emp_id]
+        else:
+            emp_finger = pd.DataFrame()
         
         time_in = None
         time_out = None
@@ -150,10 +143,10 @@ def process_attendance(df_finger, df_schedule, df_office, df_worker, target_date
         
         if not emp_finger.empty:
             row_f = emp_finger.iloc[0]
-            time_in = row_f.get('Giờ vào')
-            time_out = row_f.get('Giờ ra')
+            time_in = row_f.get(col_in) if col_in else "N/A"
+            time_out = row_f.get(col_out) if col_out else "N/A"
             try:
-               actual_hours = float(row_f.get('Tổng giờ', 0))
+               actual_hours = float(row_f.get(col_total, 0)) if col_total else 0
             except:
                actual_hours = 0
                 
@@ -189,14 +182,15 @@ def process_attendance(df_finger, df_schedule, df_office, df_worker, target_date
                 
         else:
             shift = "Nghỉ"
-            if df_schedule is not None:
-               sched_emp = df_schedule[df_schedule['Mã NV'].astype(str) == emp_id]
+            sched_id_col = find_col(df_schedule, ['mã nv', 'ma nv', 'manv', 'code', 'id', 'mã']) if df_schedule is not None else None
+            if df_schedule is not None and sched_id_col:
+               sched_emp = df_schedule[df_schedule[sched_id_col].astype(str) == emp_id]
                if not sched_emp.empty:
                    day_col = str(target_date.day)
                    if day_col in df_schedule.columns:
                        shift = str(sched_emp.iloc[0][day_col]).strip()
 
-            if shift in ['Nghỉ', 'nan', 'Nghỉ tuần']:
+            if shift in ['Nghỉ', 'nan', 'Nghỉ tuần', 'None']:
                 note = "Nghỉ theo lịch / 排班休息"
             elif emp_finger.empty:
                 note = "Vắng / 缺勤"
@@ -214,8 +208,8 @@ def process_attendance(df_finger, df_schedule, df_office, df_worker, target_date
             'Mã NV': emp_id,
             'Họ và tên': name,
             'Nhóm': group,
-            'Giờ vào': time_in if not pd.isna(time_in) else "Thiếu/无",
-            'Giờ ra': time_out if not pd.isna(time_out) else "Thiếu/无",
+            'Giờ vào': time_in if (time_in is not None and not pd.isna(time_in)) else "Thiếu/无",
+            'Giờ ra': time_out if (time_out is not None and not pd.isna(time_out)) else "Thiếu/无",
             'Giờ làm thực tế': actual_hours,
             'Ghi chú': note
         })
@@ -256,7 +250,7 @@ if file_finger and file_office:
 
     st.header(f"📈 {lang['stats_section']}")
     total_emp = len(df_result)
-    vắng_count = len(df_result[df_result['Ghi chú'].str.contains("Vắng|缺勤")])
+    vắng_count = len(df_result[df_result['Ghi chú'].str.contains("Vắng|缺勤")]) if not df_result.empty else 0
     bth_count = total_emp - vắng_count
     
     m1, m2, m3 = st.columns(3)
@@ -264,11 +258,12 @@ if file_finger and file_office:
     m2.metric(lang['present'], bth_count)
     m3.metric(lang['absent'], vắng_count)
 
-    fig = px.bar(df_result, x='Nhóm', color='Ghi chú',
-                 title=lang['chart_title'],
-                 barmode='stack', text_auto=True,
-                 color_discrete_sequence=px.colors.qualitative.Pastel)
-    st.plotly_chart(fig, use_container_width=True)
+    if not df_result.empty:
+        fig = px.bar(df_result, x='Nhóm', color='Ghi chú',
+                     title=lang['chart_title'],
+                     barmode='stack', text_auto=True,
+                     color_discrete_sequence=px.colors.qualitative.Pastel)
+        st.plotly_chart(fig, use_container_width=True)
 
     st.header(f"📋 {lang['report_section']}")
     st.dataframe(df_result, use_container_width=True)
