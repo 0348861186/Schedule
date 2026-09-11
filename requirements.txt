@@ -1,6 +1,7 @@
 streamlit
 pandas
+numpy
 plotly
-openpyxl
-reportlab
 google-genai
+fpdf2
+openpyxl
