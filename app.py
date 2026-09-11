@@ -57,14 +57,14 @@ def clean_and_normalize_chunks(df, keywords_dict):
 # 2. XỬ LÝ DỮ LIỆU LOGIC KHI ĐỦ FILE
 # ==========================================
 if file_vantay and file_vp and file_cn:
-    # Đọc dữ liệu thô ban đầu
+    # Đọc dữ liệu thô ban đầu (nếu file vân tay có dòng tiêu đề ở dòng khác, điều chỉnh tham số header=...)
     df_vantay = pd.read_excel(file_vantay)
     df_vp = pd.read_excel(file_vp)
     df_cn = pd.read_excel(file_cn)
     df_lichca = pd.read_excel(file_lichca) if file_lichca else None
     
-    # Từ khóa tìm kiếm cột tương ứng
-    kw_ma_nv = ['mã nv', 'manv', 'ma nv', 'mã nhân viên', 'ma nhan vien', 'id', 'mã số', 'mans']
+    # Từ khóa tìm kiếm cột tương ứng (mở rộng theo hình ảnh thực tế của bạn)
+    kw_ma_nv = ['mã nhân viên', 'mã nv', 'manv', 'ma nv', 'ma nhan vien', 'id', 'mã số', 'mans']
     kw_ngay = ['ngày', 'ngay', 'date']
     kw_vao = ['giờ vào', 'gio vao', 'vào', 'time in', 'giờ checkin', 'checkin', 'in']
     kw_ra = ['giờ ra', 'gio ra', 'ra', 'time out', 'giờ checkout', 'checkout', 'out']
@@ -90,7 +90,7 @@ if file_vantay and file_vp and file_cn:
     if 'Ngày' in df_vantay.columns:
         df_vantay['Ngày'] = pd.to_datetime(df_vantay['Ngày'], errors='coerce').dt.date
     else:
-        st.error("❌ Không tìm thấy cột 'Ngày' trong File Bấm Vân Tay. Vui lòng kiểm tra lại file.")
+        st.error(f"❌ Không tìm thấy cột 'Ngày' trong File Bấm Vân Tay. Các cột hiện có trong file của bạn là: {list(df_vantay.columns)}")
         st.stop()
 
     # 🎯 BỘ CHỌN THỜI GIAN TRÊN DASHBOARD
@@ -169,9 +169,20 @@ if file_vantay and file_vp and file_cn:
                 v_vao = dong_van_tay.iloc[0]['Giờ Vào'] if 'Giờ Vào' in dong_van_tay.columns else None
                 v_ra = dong_van_tay.iloc[0]['Giờ Ra'] if 'Giờ Ra' in dong_van_tay.columns else None
                 
-                # Ép kiểu dữ liệu thời gian thô từ file Excel
-                g_vao = datetime.strptime(str(v_vao).strip(), "%H:%M:%S").time() if pd.notna(v_vao) else None
-                g_ra = datetime.strptime(str(v_ra).strip(), "%H:%M:%S").time() if pd.notna(v_ra) else None
+                # Xử lý định dạng thời gian (hỗ trợ cả kiểu đối tượng time hoặc chuỗi/datetime từ excel)
+                if isinstance(v_vao, time):
+                    g_vao = v_vao
+                elif pd.notna(v_vao):
+                    g_vao = pd.to_datetime(str(v_vao).strip()).time()
+                else:
+                    g_vao = None
+
+                if isinstance(v_ra, time):
+                    g_ra = v_ra
+                elif pd.notna(v_ra):
+                    g_ra = pd.to_datetime(str(v_ra).strip()).time()
+                else:
+                    g_ra = None
                 
                 if not g_vao or not g_ra:
                    raise ValueError("Thiếu dữ liệu check-in/out")
