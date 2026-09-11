@@ -1,12 +1,16 @@
 import streamlit as st
 import pandas as pd
 import google.generativeai as genai
-import json
 
 # ==========================================
 # CẤU HÌNH GEMINI AI
 # ==========================================
-GOOGLE_API_KEY = "THAY_KEY_GEMINI_CỦA_BẠN_VÀO_ĐÂY"
+# Khuyên dùng: Nên cấu hình key trong mục "Settings" -> "Secrets" của Streamlit Cloud với biến GEMINI_KEY
+if "GEMINI_KEY" in st.secrets:
+    GOOGLE_API_KEY = st.secrets["GEMINI_KEY"]
+else:
+    GOOGLE_API_KEY = "THAY_KEY_GEMINI_CỦA_BẠN_VÀO_ĐÂY" # Hoặc dán trực tiếp key vào đây nếu chạy local
+
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
@@ -15,7 +19,7 @@ st.set_page_config(page_title="Hệ thống chấm công AI", layout="wide")
 st.title("📊 Hệ Thống Quản Lý & Phân Tích Chấm Công Thông Minh (AI)")
 
 # ==========================================
-# SIDEBAR - TẢI VÀ LOAD CÁC FILE EXCEL (Yêu cầu 1, 2, 3, 4)
+# SIDEBAR - TẢI VÀ LOAD CÁC FILE EXCEL
 # ==========================================
 st.sidebar.header("📁 Upload dữ liệu đầu vào")
 
@@ -24,31 +28,40 @@ file_xep_ca = st.sidebar.file_uploader("2. Tải file Lịch Xếp Ca (.xlsx)", 
 file_vp = st.sidebar.file_uploader("3. Tải Danh sách Nhân viên VP (.xlsx)", type=["xlsx"])
 file_cn = st.sidebar.file_uploader("4. Tải Danh sách Công nhân (.xlsx)", type=["xlsx"])
 
-# Kiểm tra xem đã tải đủ file chưa
+# Hàm tiện ích giúp chuẩn hóa tên cột (Xóa khoảng trắng ở đầu/cuối, viết thường)
+def chuan_hoa_columns(df):
+    if df is not None:
+        df.columns = df.columns.astype(str).str.strip().str.lower()
+    return df
+
+# Kiểm tra xem đã tải đủ file bắt buộc chưa
 if file_van_tay and file_vp and file_cn:
     # Đọc dữ liệu thô từ các file
-    df_van_tay = pd.read_excel(file_van_tay)
-    df_vp = pd.read_excel(file_vp)
-    df_cn = pd.read_excel(file_cn)
-    df_xep_ca = pd.read_excel(file_xep_ca) if file_xep_ca else None
+    df_van_tay = chuan_hoa_columns(pd.read_excel(file_van_tay))
+    df_vp = chuan_hoa_columns(pd.read_excel(file_vp))
+    df_cn = chuan_hoa_columns(pd.read_excel(file_cn))
+    df_xep_ca = chuan_hoa_columns(pd.read_excel(file_xep_ca)) if file_xep_ca else None
     
-    # Ép kiểu dữ liệu Cột Ngày sang chuỗi hoặc datetime để lọc
-    df_van_tay['Ngày'] = df_van_tay['Ngày'].astype(str)
+    # Tự động tìm cột 'ngày' sau khi đã chuẩn hóa viết thường
+    ten_cot_ngay = 'ngày' if 'ngày' in df_van_tay.columns else df_van_tay.columns[4] # Nếu không thấy chữ 'ngày', mặc định lấy cột thứ 5 (vị trí index 4) theo ảnh mẫu
+    
+    # Ép kiểu dữ liệu Cột Ngày sang chuỗi để bộ lọc hoạt động chính xác
+    df_van_tay[ten_cot_ngay] = df_van_tay[ten_cot_ngay].astype(str).str.strip()
 
     # ==========================================
-    # BỘ LỌC THỜI GIAN TRÊN DASHBOARD (Yêu cầu 5)
+    # BỘ LỌC THỜI GIAN TRÊN DASHBOARD
     # ==========================================
     st.subheader("🔍 Chọn thời gian cần kiểm tra")
     
     # Lấy danh sách các ngày duy nhất có trong file vân tay để user chọn
-    danh_sach_ngay = sorted(df_van_tay['Ngày'].unique())
+    danh_sach_ngay = sorted(df_van_tay[ten_cot_ngay].unique())
     ngay_chon = st.selectbox("Chọn Ngày/Tháng/Năm cần thống kê:", danh_sach_ngay)
     
     if st.button("🚀 Bắt đầu phân tích dữ liệu bằng AI"):
-        with st.spinner("AI đang đối chiếu dữ liệu văn tay và lịch trình làm việc..."):
+        with st.spinner("AI đang đối chiếu dữ liệu vân tay và lịch trình làm việc..."):
             
             # 1. Lọc dữ liệu vân tay của ngày được chọn
-            df_van_tay_loc = df_van_tay[df_van_tay['Ngày'] == ngay_chon]
+            df_van_tay_loc = df_van_tay[df_van_tay[ten_cot_ngay] == ngay_chon]
             
             # Chuyển dataframe thành dạng Text/Markdown để gửi cho Gemini
             Text_Van_Tay = df_van_tay_loc.to_markdown(index=False)
@@ -56,12 +69,12 @@ if file_van_tay and file_vp and file_cn:
             Text_CN = df_cn.to_markdown(index=False)
             Text_Xep_Ca = df_xep_ca.to_markdown(index=False) if df_xep_ca is not None else "Không có lịch xếp ca công nhân"
 
-            # 2. Xây dựng Prompt "Siêu não" gửi cho Gemini AI
+            # 2. Xây dựng Prompt gửi cho Gemini AI
             prompt = f"""
             Bạn là một chuyên gia nhân sự và phân tích dữ liệu chấm công cấp cao. 
             Nhiệm vụ của bạn là đối chiếu dữ liệu từ các bảng sau để xác định trạng thái đi làm của nhân viên vào ngày {ngay_chon}.
 
-            DANH SÁCH DỮ LIỆU ĐẦU VÀO:
+            DANH SÁCH DỮ LIỆU ĐẦU VÀO (Tên các cột đã được chuyển về chữ viết thường):
             ---
             1. BẢNG BẤM VÂN TAY (Ngày {ngay_chon}):
             {Text_Van_Tay}
