@@ -50,37 +50,87 @@ gemini_api_key = st.sidebar.text_input(
 )
 
 
-# Hàm ánh xạ tên cột linh hoạt để tránh lỗi KeyError do khác biệt định dạng trong file Excel
-def map_columns(df, mapping_dict):
+# Hàm ánh xạ tên cột linh hoạt thông minh
+def map_columns(df, mapping_dict, file_label=""):
     if df.empty:
         return df
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
+
+    # Kiểm tra xem có tìm thấy cột mục tiêu không, nếu không lấy cột đầu tiên làm MaNV nếu cần
     for target, aliases in mapping_dict.items():
+        found = False
         for col in df.columns:
-            if col.lower().replace(" ", "") in [
-                a.lower().replace(" ", "") for a in aliases
+            if col.lower().replace(" ", "").replace("_", "") in [
+                a.lower().replace(" ", "").replace("_", "") for a in aliases
             ]:
                 df = df.rename(columns={col: target})
+                found = True
                 break
+        # Fallback thông minh nếu không tìm thấy MaNV và đây là file nhân sự/chấm công
+        if not found and target == "MaNV" and len(df.columns) > 0:
+            # Lấy cột đầu tiên làm MaNV và cảnh báo nhẹ
+            df = df.rename(columns={df.columns[0]: "MaNV"})
+        if not found and target == "HoTen" and len(df.columns) > 1:
+            df = df.rename(columns={df.columns[1]: "HoTen"})
+
     return df
 
 
 cc_map = {
-    "MaNV": ["MaNV", "Mã NV", "Mã Nhân Viên", "Manv", "Ma nhan vien"],
-    "HoTen": ["HoTen", "Họ Tên", "Họ và tên", "Hoten", "Ten"],
-    "Ngay": ["Ngay", "Ngày", "Date"],
-    "ThoiGianVao": ["ThoiGianVao", "Giờ Vào", "Vao", "CheckIn", "Thoi gian vao"],
-    "ThoiGianRa": ["ThoiGianRa", "Giờ Ra", "Ra", "CheckOut", "Thoi gian ra"],
+    "MaNV": [
+        "MaNV",
+        "Mã NV",
+        "Mã Nhân Viên",
+        "Manv",
+        "Ma nhan vien",
+        "UserCode",
+        "ID",
+        "Mã",
+    ],
+    "HoTen": ["HoTen", "Họ Tên", "Họ và tên", "Hoten", "Ten", "Tên nhân viên"],
+    "Ngay": ["Ngay", "Ngày", "Date", "Time"],
+    "ThoiGianVao": [
+        "ThoiGianVao",
+        "Giờ Vào",
+        "Vao",
+        "CheckIn",
+        "Thoi gian vao",
+        "TimeIn",
+    ],
+    "ThoiGianRa": [
+        "ThoiGianRa",
+        "Giờ Ra",
+        "Ra",
+        "CheckOut",
+        "Thoi gian ra",
+        "TimeOut",
+    ],
 }
 
 nv_map = {
-    "MaNV": ["MaNV", "Mã NV", "Mã Nhân Viên", "Manv"],
+    "MaNV": [
+        "MaNV",
+        "Mã NV",
+        "Mã Nhân Viên",
+        "Manv",
+        "Ma nhan vien",
+        "ID",
+        "Mã",
+    ],
     "HoTen": ["HoTen", "Họ Tên", "Họ và tên", "Hoten", "Ten"],
 }
 
 lich_map = {
-    "MaNV": ["MaNV", "Mã NV", "Mã Nhân Viên", "Manv"],
+    "MaNV": [
+        "MaNV",
+        "Mã NV",
+        "Mã Nhân Viên",
+        "Manv",
+        "Ma nhan vien",
+        "ID",
+        "Mã",
+    ],
     "Ngay": ["Ngay", "Ngày", "Date"],
     "Ca": ["Ca", "Ca Làm", "Ca làm việc", "Shift"],
 }
@@ -115,6 +165,13 @@ if uploaded_cham_cong and uploaded_cn and uploaded_vp and uploaded_lich:
         uploaded_cham_cong, uploaded_cn, uploaded_vp, uploaded_lich
     )
 
+    # Hiển thị thông báo kiểm tra cấu trúc cột thực tế để người dùng dễ theo dõi
+    with st.expander("🔍 Xem thông tin cấu trúc cột đã nhận diện từ file Excel"):
+        st.write("**Cột file Bấm Vân Tay:**", list(df_cc.columns))
+        st.write("**Cột file Công Nhân:**", list(df_cn.columns))
+        st.write("**Cột file Văn Phòng:**", list(df_vp.columns))
+        st.write("**Cột file Lịch Ca:**", list(df_lich.columns))
+
     # Phân loại nhóm nhân viên
     if not df_cn.empty:
         df_cn["Nhom"] = "Công Nhân"
@@ -127,23 +184,31 @@ if uploaded_cham_cong and uploaded_cn and uploaded_vp and uploaded_lich:
 
     # --- XỬ LÝ DỮ LIỆU CHẤM CÔNG & LOGIC ---
     if not df_cc.empty and not df_nv_all.empty:
-        # Kiểm tra an toàn các cột trước khi merge để tránh KeyError
-        available_cols = [
-            c for c in ["MaNV", "HoTen", "Nhom"] if c in df_nv_all.columns
-        ]
-        if "MaNV" in available_cols:
+        if "MaNV" in df_cc.columns and "MaNV" in df_nv_all.columns:
             df_merged = pd.merge(
-                df_cc, df_nv_all[available_cols], on="MaNV", how="left"
+                df_cc,
+                df_nv_all[["MaNV", "HoTen", "Nhom"]].drop_duplicates(
+                    subset=["MaNV"]
+                ),
+                on="MaNV",
+                how="left",
+                suffixes=("", "_nv"),
             )
+            # Ưu tiên lấy HoTen từ bảng nhân sự nếu có
+            if "HoTen_nv" in df_merged.columns:
+                df_merged["HoTen"] = df_merged["HoTen_nv"].fillna(
+                    df_merged.get("HoTen", "Không rõ")
+                )
+                df_merged = df_merged.drop(columns=["HoTen_nv"])
         else:
-            st.error(
-                "❌ Lỗi: File danh sách nhân sự thiếu cột 'MaNV' (Mã nhân viên). Vui lòng kiểm tra lại tên cột trong file Excel."
-            )
             df_merged = df_cc.copy()
+            st.warning(
+                "⚠️ Không tìm thấy cột 'MaNV' tương thích tuyệt đối giữa file chấm công và file nhân sự. Hệ thống sẽ giữ nguyên dữ liệu gốc."
+            )
     else:
         df_merged = df_cc.copy()
 
-    if not "Nhom" in df_merged.columns:
+    if "Nhom" not in df_merged.columns:
         df_merged["Nhom"] = "Khác"
 
     if (
