@@ -50,13 +50,55 @@ gemini_api_key = st.sidebar.text_input(
 )
 
 
+# Hàm ánh xạ tên cột linh hoạt để tránh lỗi KeyError do khác biệt định dạng trong file Excel
+def map_columns(df, mapping_dict):
+    if df.empty:
+        return df
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+    for target, aliases in mapping_dict.items():
+        for col in df.columns:
+            if col.lower().replace(" ", "") in [
+                a.lower().replace(" ", "") for a in aliases
+            ]:
+                df = df.rename(columns={col: target})
+                break
+    return df
+
+
+cc_map = {
+    "MaNV": ["MaNV", "Mã NV", "Mã Nhân Viên", "Manv", "Ma nhan vien"],
+    "HoTen": ["HoTen", "Họ Tên", "Họ và tên", "Hoten", "Ten"],
+    "Ngay": ["Ngay", "Ngày", "Date"],
+    "ThoiGianVao": ["ThoiGianVao", "Giờ Vào", "Vao", "CheckIn", "Thoi gian vao"],
+    "ThoiGianRa": ["ThoiGianRa", "Giờ Ra", "Ra", "CheckOut", "Thoi gian ra"],
+}
+
+nv_map = {
+    "MaNV": ["MaNV", "Mã NV", "Mã Nhân Viên", "Manv"],
+    "HoTen": ["HoTen", "Họ Tên", "Họ và tên", "Hoten", "Ten"],
+}
+
+lich_map = {
+    "MaNV": ["MaNV", "Mã NV", "Mã Nhân Viên", "Manv"],
+    "Ngay": ["Ngay", "Ngày", "Date"],
+    "Ca": ["Ca", "Ca Làm", "Ca làm việc", "Shift"],
+}
+
+
 @st.cache_data
-def load_data(f_cc, f_cn, f_vp, f_lich):
+def load_and_process_data(f_cc, f_cn, f_vp, f_lich):
     try:
         df_cc = pd.read_excel(f_cc) if f_cc else pd.DataFrame()
         df_cn = pd.read_excel(f_cn) if f_cn else pd.DataFrame()
         df_vp = pd.read_excel(f_vp) if f_vp else pd.DataFrame()
         df_lich = pd.read_excel(f_lich) if f_lich else pd.DataFrame()
+
+        df_cc = map_columns(df_cc, cc_map)
+        df_cn = map_columns(df_cn, nv_map)
+        df_vp = map_columns(df_vp, nv_map)
+        df_lich = map_columns(df_lich, lich_map)
+
         return df_cc, df_cn, df_vp, df_lich
     except Exception as e:
         st.error(f"Lỗi đọc file: {e}")
@@ -69,36 +111,48 @@ def load_data(f_cc, f_cn, f_vp, f_lich):
 
 
 if uploaded_cham_cong and uploaded_cn and uploaded_vp and uploaded_lich:
-    df_cc, df_cn, df_vp, df_lich = load_data(
+    df_cc, df_cn, df_vp, df_lich = load_and_process_data(
         uploaded_cham_cong, uploaded_cn, uploaded_vp, uploaded_lich
     )
 
     # Phân loại nhóm nhân viên
-    df_cn["Nhom"] = "Công Nhân"
-    df_vp["Nhom"] = "Văn Phòng"
-    df_nv_all = pd.concat([df_cn, df_vp], ignore_index=True)
+    if not df_cn.empty:
+        df_cn["Nhom"] = "Công Nhân"
+    if not df_vp.empty:
+        df_vp["Nhom"] = "Văn Phòng"
+
+    df_nv_all = pd.concat(
+        [df for df in [df_cn, df_vp] if not df.empty], ignore_index=True
+    )
 
     # --- XỬ LÝ DỮ LIỆU CHẤM CÔNG & LOGIC ---
-    # Merge thông tin nhân viên vào bảng chấm công
-    df_merged = pd.merge(
-        df_cc, df_nv_all[["MaNV", "HoTen", "Nhom"]], on="MaNV", how="left"
-    )
-    df_merged = pd.merge(
-        df_merged,
-        df_lich[["MaNV", "Ngay", "Ca"]],
-        on=["MaNV", "Ngay"],
-        how="left",
-    )
+    if not df_cc.empty and not df_nv_all.empty:
+        df_merged = pd.merge(
+            df_cc, df_nv_all[["MaNV", "HoTen", "Nhom"]], on="MaNV", how="left"
+        )
+    else:
+        df_merged = df_cc.copy()
+        if not "Nhom" in df_merged.columns:
+            df_merged["Nhom"] = "Khác"
+
+    if not df_lich.empty and "MaNV" in df_lich.columns and "Ngay" in df_lich.columns:
+        df_merged = pd.merge(
+            df_merged,
+            df_lich[["MaNV", "Ngay", "Ca"]],
+            on=["MaNV", "Ngay"],
+            how="left",
+        )
+    else:
+        df_merged["Ca"] = "HC"
+
 
     # Xử lý logic tính toán giờ vào/ra, đi trễ, về sớm, tăng ca
-    # Định nghĩa giờ chuẩn (ví dụ ca hành chính: Vào 08:00, Ra 17:00; Ca Đêm: Vào 22:00, Ra 06:00 sáng hôm sau)
     def calculate_attendance(row):
         nhom = row.get("Nhom", "Khác")
         ca = row.get("Ca", "HC")
         gio_vao = row.get("ThoiGianVao")
         gio_ra = row.get("ThoiGianRa")
 
-        status = "Bình Thường"
         ghi_chu = "BT"
         gio_lam_viec = 0.0
 
@@ -107,37 +161,33 @@ if uploaded_cham_cong and uploaded_cn and uploaded_vp and uploaded_lich:
                 ["Vắng / Không bấm thẻ", "Chưa bấm thẻ", 0.0, "Vắng"]
             )
 
-        # Chuyển đổi định dạng giờ nếu là string
         try:
             t_vao = pd.to_datetime(str(gio_vao)).time()
             t_ra = pd.to_datetime(str(gio_ra)).time()
         except:
             return pd.Series(["Lỗi định dạng giờ", "Lỗi", 0.0, "Lỗi"])
 
-        # Tính tổng giờ làm đơn giản (giả định tính theo giờ)
         dt_vao = datetime.combine(datetime.today(), t_vao)
         dt_ra = datetime.combine(datetime.today(), t_ra)
         if dt_ra < dt_vao:  # Ca qua đêm
             dt_ra += pd.Timedelta(days=1)
 
         gio_lam_viec = (dt_ra - dt_vao).seconds / 3600.0
-        # Trừ thời gian nghỉ trưa/giữa ca (ví dụ 1 tiếng nếu làm > 5 tiếng)
         if gio_lam_viec > 5:
-            gio_lam_viec -= 1.0
+            gio_lam_viec -= 1.0  # Trừ giờ nghỉ trưa/giữa ca
 
-        # Đánh giá theo nhóm công nhân / văn phòng dựa trên lịch ca
-        if nhom == "Công Nhân":
-            if ca == "Đ":  # Ca đêm
+        if str(nhom).strip() == "Công Nhân":
+            if str(ca).strip().upper() in ["Đ", "ĐÊM"]:
                 if t_vao > pd.to_datetime("22:15:00").time():
                     ghi_chu = "Đi trễ"
-            else:  # Ca ngày chuẩn
+            else:
                 if t_vao > pd.to_datetime("08:15:00").time():
                     ghi_chu = "Đi trễ"
                 if t_ra < pd.to_datetime("17:00:00").time():
                     ghi_chu = (
                         "Về sớm" if ghi_chu == "BT" else "Đi trễ & Về sớm"
                     )
-        else:  # Văn phòng và nhóm còn lại
+        else:
             if gio_lam_viec < 8.0:
                 ghi_chu = "Về sớm / Thiếu giờ"
             elif gio_lam_viec > 8.5:
@@ -145,35 +195,43 @@ if uploaded_cham_cong and uploaded_cn and uploaded_vp and uploaded_lich:
             else:
                 ghi_chu = "BT"
 
-        return pd.Series([status, ghi_chu, round(gio_lam_viec, 2), ca])
+        return pd.Series(
+            ["Bình Thường", ghi_chu, round(gio_lam_viec, 2), ca]
+        )
 
-    df_merged[
-        ["TrangThaiChamCong", "DanhGia", "TongGioLam", "CaLamViec"]
-    ] = df_merged.apply(calculate_attendance, axis=1)
+
+    if not df_merged.empty:
+        df_merged[
+            ["TrangThaiChamCong", "DanhGia", "TongGioLam", "CaLamViec"]
+        ] = df_merged.apply(calculate_attendance, axis=1)
 
     # --- BỘ LỌC TRÊN DASHBOARD ---
     st.sidebar.header("🔍 Bộ Lọc Phân Tích")
     unique_dates = (
-        sorted(df_merged["Ngay"].dropna().unique())
-        if "Ngay" in df_merged.columns
+        sorted(df_merged["Ngay"].dropna().astype(str).unique())
+        if "Ngay" in df_merged.columns and not df_merged.empty
         else []
     )
     selected_date = st.sidebar.selectbox(
         "Chọn Ngày Phân Tích", ["Tất cả"] + list(unique_dates)
     )
 
-    selected_nhom = st.sidebar.selectbox(
-        "Chọn Nhóm Nhân Sự", ["Tất cả", "Công Nhân", "Văn Phòng"]
+    unique_nhom = (
+        list(df_merged["Nhom"].dropna().unique())
+        if "Nhom" in df_merged.columns and not df_merged.empty
+        else []
     )
-    selected_time_type = st.sidebar.selectbox(
-        "Lọc Loại Thời Gian Bấm Thẻ", ["Tất cả", "Vào", "Ra"]
+    selected_nhom = st.sidebar.selectbox(
+        "Chọn Nhóm Nhân Sự", ["Tất cả"] + unique_nhom
     )
 
     # Áp dụng bộ lọc
     df_filtered = df_merged.copy()
-    if selected_date != "Tất cả":
-        df_filtered = df_filtered[df_filtered["Ngay"] == selected_date]
-    if selected_nhom != "Tất cả":
+    if selected_date != "Tất cả" and "Ngay" in df_filtered.columns:
+        df_filtered = df_filtered[
+            df_filtered["Ngay"].astype(str) == selected_date
+        ]
+    if selected_nhom != "Tất cả" and "Nhom" in df_filtered.columns:
         df_filtered = df_filtered[df_filtered["Nhom"] == selected_nhom]
 
     # --- HIỂN THỊ CHỈ SỐ TỔNG QUAN (METRICS) ---
@@ -182,12 +240,30 @@ if uploaded_cham_cong and uploaded_cn and uploaded_vp and uploaded_lich:
     )
 
     total_nv = len(df_filtered)
-    di_tre = len(df_filtered[df_filtered["DanhGia"].str.contains("Đi trễ")])
-    ve_som = len(df_filtered[df_filtered["DanhGia"].str.contains("Về sớm")])
-    khong_bam_the = len(
-        df_filtered[df_filtered["TrangThaiChamCong"].str.contains("Vắng")]
+    di_tre = (
+        len(df_filtered[df_filtered["DanhGia"].str.contains("Đi trễ")])
+        if "DanhGia" in df_filtered.columns
+        else 0
     )
-    tang_ca = len(df_filtered[df_filtered["DanhGia"] == "Tăng ca"])
+    ve_som = (
+        len(df_filtered[df_filtered["DanhGia"].str.contains("Về sớm")])
+        if "DanhGia" in df_filtered.columns
+        else 0
+    )
+    khong_bam_the = (
+        len(
+            df_filtered[
+                df_filtered["TrangThaiChamCong"].str.contains("Vắng")
+            ]
+        )
+        if "TrangThaiChamCong" in df_filtered.columns
+        else 0
+    )
+    tang_ca = (
+        len(df_filtered[df_filtered["DanhGia"] == "Tăng ca"])
+        if "DanhGia" in df_filtered.columns
+        else 0
+    )
 
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Tổng Nhân Sự Lọc", total_nv)
@@ -202,7 +278,7 @@ if uploaded_cham_cong and uploaded_cn and uploaded_vp and uploaded_lich:
 
     with col_chart1:
         st.markdown("#### 📊 Tỷ Lệ Đánh Giá Chấm Công")
-        if not df_filtered.empty:
+        if not df_filtered.empty and "DanhGia" in df_filtered.columns:
             fig_pie = px.pie(
                 df_filtered,
                 names="DanhGia",
@@ -214,13 +290,19 @@ if uploaded_cham_cong and uploaded_cn and uploaded_vp and uploaded_lich:
             st.info("Không có dữ liệu hiển thị biểu đồ.")
 
     with col_chart2:
-        st.markdown("#### 📉 Tổng Giờ Làm Theo Bộ Phận")
-        if not df_filtered.empty and "TongGioLam" in df_filtered.columns:
+        st.markdown("#### 📉 Tổng Giờ Làm Theo Nhân Sự")
+        if (
+            not df_filtered.empty
+            and "TongGioLam" in df_filtered.columns
+            and "HoTen" in df_filtered.columns
+        ):
             fig_bar = px.bar(
                 df_filtered,
                 x="HoTen",
                 y="TongGioLam",
-                color="Nhom",
+                color=(
+                    "Nhom" if "Nhom" in df_filtered.columns else None
+                ),
                 barmode="group",
                 color_discrete_sequence=px.colors.qualitative.Pastel,
             )
@@ -238,7 +320,6 @@ if uploaded_cham_cong and uploaded_cn and uploaded_vp and uploaded_lich:
     col_dl1, col_dl2 = st.columns(2)
 
 
-    # Hàm xuất Excel
     def convert_df_to_excel(df):
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -247,25 +328,24 @@ if uploaded_cham_cong and uploaded_cn and uploaded_vp and uploaded_lich:
         return processed_data
 
 
-    excel_data = convert_df_to_excel(df_filtered)
+    if not df_filtered.empty:
+        excel_data = convert_df_to_excel(df_filtered)
+        with col_dl1:
+            st.download_button(
+                label="📥 Tải Xuống Báo Cáo Excel",
+                data=excel_data,
+                file_name=f"BaoCao_ChamCong_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
 
-    with col_dl1:
-        st.download_button(
-            label="📥 Tải Xuống Báo Cáo Excel",
-            data=excel_data,
-            file_name=f"BaoCao_ChamCong_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-    with col_dl2:
-        # Báo cáo dạng text thuần/CSV giả lập cho PDF download đơn giản hoặc có thể dùng thư viện reportlab
-        pdf_data = df_filtered.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="📥 Tải Xuống Báo Cáo (PDF/CSV Định Dạng Chuẩn)",
-            data=pdf_data,
-            file_name=f"BaoCao_ChamCong_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-        )
+        with col_dl2:
+            csv_data = df_filtered.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="📥 Tải Xuống Báo Cáo (CSV Chuẩn)",
+                data=csv_data,
+                file_name=f"BaoCao_ChamCong_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+            )
 
     # --- TÍCH HỢP GEMINI AI PHÂN TÍCH ---
     st.markdown("---")
