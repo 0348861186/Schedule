@@ -99,6 +99,9 @@ uploaded_cn = st.sidebar.file_uploader(t['cn_file'], type=["xlsx", "xls"])
 
 use_sample = st.sidebar.button(t['sample_data_btn'])
 
+# Khởi tạo giá trị mặc định tránh lỗi NameError
+df_fp, df_shift, df_vp, df_cn = None, None, None, None
+
 if use_sample:
     try:
         df_fp = pd.read_excel("sample_data/bang_cham_cong.xlsx")
@@ -107,12 +110,16 @@ if use_sample:
         df_cn = pd.read_excel("sample_data/danh_sach_cong_nhan.xlsx")
         st.sidebar.success("Đã tải dữ liệu mẫu thành công! / 示例数据加载成功！")
     except Exception as e:
-        st.sidebar.error(f"Lỗi tải mẫu: {e}")
+        st.sidebar.error(f"Lỗi tải mẫu (Vui lòng upload file thủ công): {e}")
 else:
-    df_fp = pd.read_excel(uploaded_fp) if uploaded_fp else None
-    df_shift = pd.read_excel(uploaded_shift) if uploaded_shift else None
-    df_vp = pd.read_excel(uploaded_vp) if uploaded_vp else None
-    df_cn = pd.read_excel(uploaded_cn) if uploaded_cn else None
+    if uploaded_fp is not None:
+        df_fp = pd.read_excel(uploaded_fp) if uploaded_fp.name.endswith(('.xlsx', '.xls')) else pd.read_csv(uploaded_fp)
+    if uploaded_shift is not None:
+        df_shift = pd.read_excel(uploaded_shift)
+    if uploaded_vp is not None:
+        df_vp = pd.read_excel(uploaded_vp)
+    if uploaded_cn is not None:
+        df_cn = pd.read_excel(uploaded_cn)
 
 if df_fp is not None:
     # Ensure datetime format
@@ -151,7 +158,6 @@ if df_fp is not None:
         name_map.update(dict(zip(df_vp['MaNV'], df_vp['HoTen'])))
 
     # Filter logs for selected date (and next day morning for night shifts)
-    # Get all punch logs for selected date
     day_logs = df_fp[df_fp['Ngay'] == selected_date]
 
     # Evaluate attendance for all known employees
@@ -180,7 +186,6 @@ if df_fp is not None:
             std_in = datetime.datetime.combine(selected_date, datetime.datetime.strptime(special_ids[manv]["in"], "%H:%M").time())
             std_out = datetime.datetime.combine(selected_date, datetime.datetime.strptime(special_ids[manv]["out"], "%H:%M").time())
             
-            # Find punch near std_in and std_out
             day_punches = emp_punches[emp_punches['ThoiGian'].dt.date == selected_date]
             if not day_punches.empty:
                 in_punch = day_punches[day_punches['ThoiGian'] <= std_in + pd.Timedelta(hours=2)]
@@ -213,7 +218,6 @@ if df_fp is not None:
                     actual_hours = round((co_dt - ci_dt).seconds / 3600.0, 1)
 
         elif is_vp:
-            # Office staff: 08:00 - 17:00, Sunday rest
             is_sunday = selected_date.weekday() == 6
             if is_sunday:
                 notes.append("Nghỉ Chủ Nhật")
@@ -244,7 +248,6 @@ if df_fp is not None:
                         notes.append("Đúng giờ")
 
         elif is_worker and df_shift is not None:
-            # Check shift
             shift_row = df_shift[(df_shift['MaNV'] == manv) & (df_shift['Ngay'] == selected_date)]
             shift_type = shift_row['Ca'].values[0] if not shift_row.empty else "Nghỉ"
             
@@ -252,7 +255,7 @@ if df_fp is not None:
                 notes.append("Ngày nghỉ")
             elif shift_type == "Lễ":
                 notes.append("Lễ")
-            elif shift_type == "N": # Day shift 7:00 - 19:00
+            elif shift_type == "N": 
                 std_in = datetime.datetime.combine(selected_date, datetime.time(7, 0))
                 std_out = datetime.datetime.combine(selected_date, datetime.time(19, 0))
                 day_p = emp_punches[emp_punches['ThoiGian'].dt.date == selected_date]
@@ -273,7 +276,7 @@ if df_fp is not None:
                         notes.append("BR")
                     if not notes:
                         notes.append("Đúng giờ")
-            elif shift_type == "Đ": # Night shift 19:00 to 7:00 next day
+            elif shift_type == "Đ": 
                 std_in = datetime.datetime.combine(selected_date, datetime.time(19, 0))
                 next_date = selected_date + pd.Timedelta(days=1)
                 std_out = datetime.datetime.combine(next_date, datetime.time(7, 0))
@@ -291,7 +294,6 @@ if df_fp is not None:
                     if not notes:
                         notes.append("Đúng giờ ca đêm")
         else:
-            # Default fallback
             day_p = emp_punches[emp_punches['ThoiGian'].dt.date == selected_date]
             if not day_p.empty:
                 check_in_str = day_p.iloc[0]['ThoiGian'].strftime("%H:%M")
@@ -364,7 +366,6 @@ if df_fp is not None:
         )
 
     with col_dl2:
-        # Generate HTML report for PDF/Print
         html_report = f"""
         <html>
         <head><meta charset="utf-8"><style>
