@@ -99,7 +99,6 @@ uploaded_cn = st.sidebar.file_uploader(t['cn_file'], type=["xlsx", "xls"])
 
 use_sample = st.sidebar.button(t['sample_data_btn'])
 
-# Khởi tạo giá trị mặc định tránh lỗi NameError
 df_fp, df_shift, df_vp, df_cn = None, None, None, None
 
 if use_sample:
@@ -110,7 +109,7 @@ if use_sample:
         df_cn = pd.read_excel("sample_data/danh_sach_cong_nhan.xlsx")
         st.sidebar.success("Đã tải dữ liệu mẫu thành công! / 示例数据加载成功！")
     except Exception as e:
-        st.sidebar.error(f"Lỗi tải mẫu (Vui lòng upload file thủ công): {e}")
+        st.sidebar.error(f"Lỗi tải mẫu: {e}")
 else:
     if uploaded_fp is not None:
         df_fp = pd.read_excel(uploaded_fp) if uploaded_fp.name.endswith(('.xlsx', '.xls')) else pd.read_csv(uploaded_fp)
@@ -122,26 +121,74 @@ else:
         df_cn = pd.read_excel(uploaded_cn)
 
 if df_fp is not None:
+    # Tự động nhận diện cột Mã NV và Thời gian/Ngày trong tệp bấm vân tay
+    manv_col, time_col = None, None
+    for c in df_fp.columns:
+        cl = c.lower()
+        if any(k in cl for k in ['manv', 'mã nv', 'ma nv', 'code', 'id', '工号']):
+            manv_col = c
+        elif any(k in cl for k in ['thoigian', 'thời gian', 'time', 'date', 'ngày', 'ngay', 'datetime', 'giờ', 'check', '日期', '时间']):
+            time_col = c
+            
+    if not manv_col: manv_col = df_fp.columns[0]
+    if not time_col: time_col = df_fp.columns[1] if len(df_fp.columns) > 1 else df_fp.columns[0]
+
+    df_fp = df_fp.rename(columns={manv_col: 'MaNV', time_col: 'ThoiGian'})
+
     # Ensure datetime format
-    df_fp['ThoiGian'] = pd.to_datetime(df_fp['ThoiGian'])
+    df_fp['ThoiGian'] = pd.to_datetime(df_fp['ThoiGian'], errors='coerce')
+    df_fp = df_fp.dropna(subset=['ThoiGian'])
     df_fp['Ngay'] = df_fp['ThoiGian'].dt.date
     df_fp['MaNV'] = df_fp['MaNV'].astype(str).str.strip()
 
     # Date Filter
     st.sidebar.header(t['filter_section'])
     available_dates = sorted(df_fp['Ngay'].unique())
+    if not available_dates:
+        st.error("Không tìm thấy dữ liệu thời gian hợp lệ trong tệp bấm vân tay. / 指纹文件中找不到有效的时间数据。")
+        st.stop()
+        
     selected_date = st.sidebar.selectbox(t['select_date'], options=available_dates)
 
-    # Process lists
-    if df_cn is not None:
-        df_cn['MaNV'] = df_cn['MaNV'].astype(str).str.strip()
-    if df_vp is not None:
-        df_vp['MaNV'] = df_vp['MaNV'].astype(str).str.strip()
-    if df_shift is not None:
-        df_shift['MaNV'] = df_shift['MaNV'].astype(str).str.strip()
-        df_shift['Ngay'] = pd.to_datetime(df_shift['Ngay']).dt.date
+    # Process lists & standardize columns for lists
+    for dff, key_opts in [(df_cn, ['manv', 'mã nv', 'ma nv', 'id', 'code', '工号']), 
+                          (df_vp, ['manv', 'mã nv', 'ma nv', 'id', 'code', '工号'])]:
+        if dff is not None:
+            found_col = None
+            for c in dff.columns:
+                if any(k in c.lower() for k in key_opts):
+                    found_col = c
+                    break
+            if found_col:
+                dff['MaNV'] = dff[found_col].astype(str).str.strip()
+            else:
+                dff['MaNV'] = dff.iloc[:, 0].astype(str).str.strip()
 
-    # Combine all employees or create master list
+            name_col = None
+            for c in dff.columns:
+                if any(k in c.lower() for k in ['hoten', 'họ tên', 'name', '姓名', 'ten']):
+                    name_col = c
+                    break
+            if name_col:
+                dff['HoTen'] = dff[name_col].astype(str).str.strip()
+            else:
+                dff['HoTen'] = "NV " + dff['MaNV']
+
+    if df_shift is not None:
+        shift_manv_col, shift_date_col, shift_ca_col = None, None, None
+        for c in df_shift.columns:
+            cl = c.lower()
+            if any(k in cl for k in ['manv', 'mã nv', 'ma nv', 'id', '工号']):
+                shift_manv_col = c
+            elif any(k in cl for k in ['ngay', 'date', 'ngày', '日期']):
+                shift_date_col = c
+            elif any(k in cl for k in ['ca', 'shift', '班']):
+                shift_ca_col = c
+        
+        if shift_manv_col: df_shift['MaNV'] = df_shift[shift_manv_col].astype(str).str.strip()
+        if shift_date_col: df_shift['Ngay'] = pd.to_datetime(df_shift[shift_date_col], errors='coerce').dt.date
+        if shift_ca_col: df_shift['Ca'] = df_shift[shift_ca_col].astype(str).str.strip()
+
     workers_list = df_cn['MaNV'].tolist() if df_cn is not None else []
     vp_list = df_vp['MaNV'].tolist() if df_vp is not None else []
     special_ids = {"575": {"in": "07:00", "out": "15:00"},
@@ -150,17 +197,13 @@ if df_fp is not None:
                    "673": {"in": "07:00", "out": "15:00"},
                    "A068": {"in": "10:00", "out": "18:00"}}
 
-    # Get names mapping
     name_map = {}
     if df_cn is not None:
         name_map.update(dict(zip(df_cn['MaNV'], df_cn['HoTen'])))
     if df_vp is not None:
         name_map.update(dict(zip(df_vp['MaNV'], df_vp['HoTen'])))
 
-    # Filter logs for selected date (and next day morning for night shifts)
     day_logs = df_fp[df_fp['Ngay'] == selected_date]
-
-    # Evaluate attendance for all known employees
     all_manvs = set(workers_list + vp_list + list(special_ids.keys()) + df_fp['MaNV'].unique().tolist())
 
     results = []
@@ -170,10 +213,8 @@ if df_fp is not None:
         is_vp = manv in vp_list
         is_special = manv in special_ids
 
-        # Determine employee type
         emp_type = "Công Nhân" if is_worker else ("Văn Phòng" if is_vp else "Khác")
 
-        # Get punches for this employee around selected date
         emp_punches = df_fp[(df_fp['MaNV'] == manv) & (df_fp['ThoiGian'].dt.date >= selected_date) & (df_fp['ThoiGian'].dt.date <= selected_date + pd.Timedelta(days=1))]
         emp_punches = emp_punches.sort_values('ThoiGian')
 
