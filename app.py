@@ -120,31 +120,46 @@ if file_vantay and file_vp and file_cn:
         # 2. Dò dữ liệu bấm vân tay
         dong_van_tay = df_vantay_ngay[df_vantay_ngay['Mã NV'] == ma]
         
-        if dong_van_tay.empty:
-            # Không có dữ liệu bấm thẻ
-            trang_thai = "Vắng (Không bấm thẻ)"
-            g_vao, g_ra = "N/A", "N/A"
-        else:
-            # Có bấm thẻ, tiến hành so khớp giờ
-            v_vao_str = dong_van_tay.iloc[0]['Giờ Vào']
-            v_ra_str = dong_van_tay.iloc[0]['Giờ Ra']
+        if file_vantay and file_vp and file_cn:
+    # Đọc dữ liệu từ excel
+    df_vantay = pd.read_excel(file_vantay)
+    df_vp = pd.read_excel(file_vp)
+    df_cn = pd.read_excel(file_cn)
+    df_lichca = pd.read_excel(file_lichca) if file_lichca else None
+    
+    # 🌟 ĐOẠN SỬA ĐỔI: TỰ ĐỘNG CHUẨN HÓA TÊN CỘT (Xóa khoảng trắng, viết thường để dò)
+    for df in [df_vantay, df_vp, df_cn] + ([df_lichca] if df_lichca is not None else []):
+        # Đổi tên cột về dạng viết thường và xóa khoảng trắng hai đầu để dễ dò
+        df.columns = df.columns.astype(str).str.strip()
+        
+        # Tự động tìm và đổi tên cột Mã Nhân Viên về chuẩn 'Mã NV'
+        ma_nv_col = [c for c in df.columns if c.lower() in ['mã nv', 'manv', 'ma nv', 'mã nhân viên', 'ma nhan vien', 'id', 'mã số']]
+        if ma_nv_col:
+            df.rename(columns={ma_nv_col[0]: 'Mã NV'}, inplace=True)
+            df['Mã NV'] = df['Mã NV'].astype(str).str.strip() # Ép kiểu chuỗi
             
-            # Chuyển đổi chuỗi thành object time để so sánh
-            g_vao = datetime.strptime(str(v_vao_str), "%H:%M:%S").time() if pd.notna(v_vao_str) else None
-            g_ra = datetime.strptime(str(v_ra_str), "%H:%M:%S").time() if pd.notna(v_ra_str) else None
-            
-            if not g_vao or not g_ra:
-                trang_thai = "Thiếu dữ liệu Vào hoặc Ra"
-            else:
-                # Đánh giá Đi trễ / Về sớm
-                ly_do = []
-                if g_vao > gio_vao_chuan:
-                    ly_do.append("Đi trễ")
-                if g_ra < gio_ra_chuan:
-                    ly_do.append("Về sớm")
-                
-                trang_thai = " + ".join(ly_do) if ly_do else "Đúng giờ"
-                
+    # Tự động chuẩn hóa cột Ngày, Giờ cho file vân tay
+    df_vantay.columns = df_vantay.columns.astype(str).str.strip()
+    ngay_col = [c for c in df_vantay.columns if c.lower() in ['ngày', 'ngay', 'date']]
+    if ngay_col: df.rename(columns={ngay_col[0]: 'Ngày'}, inplace=True)
+        
+    gio_vao_col = [c for c in df_vantay.columns if c.lower() in ['giờ vào', 'gio vao', 'vào', 'time in', 'giờ checkin']]
+    if gio_vao_col: df_vantay.rename(columns={gio_vao_col[0]: 'Giờ Vào'}, inplace=True)
+        
+    gio_ra_col = [c for c in df_vantay.columns if c.lower() in ['giờ ra', 'gio ra', 'ra', 'time out', 'giờ checkout']]
+    if gio_ra_col: df_vantay.rename(columns={gio_ra_col[0]: 'Giờ Ra'}, inplace=True)
+
+    # Chuẩn hóa ngày cho file lịch ca
+    if df_lichca is not None:
+        ngay_ca_col = [c for c in df_lichca.columns if c.lower() in ['ngày', 'ngay', 'date']]
+        if ngay_ca_col: df_lichca.rename(columns={ngay_ca_col[0]: 'Ngày'}, inplace=True)
+        df_lichca['Ngày'] = pd.to_datetime(df_lichca['Ngày']).dt.date
+        
+        ca_col = [c for c in df_lichca.columns if c.lower() in ['ca', 'ca làm việc', 'shift']]
+        if ca_col: df_lichca.rename(columns={ca_col[0]: 'Ca'}, inplace=True)
+
+    # Tiếp tục xử lý ngày của file vân tay
+    df_vantay['Ngày'] = pd.to_datetime(df_vantay['Ngày']).dt.date
         # Thêm vào bảng kết quả
         ket_qua.append({
             "Mã NV": ma,
