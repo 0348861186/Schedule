@@ -127,15 +127,30 @@ if uploaded_cham_cong and uploaded_cn and uploaded_vp and uploaded_lich:
 
     # --- XỬ LÝ DỮ LIỆU CHẤM CÔNG & LOGIC ---
     if not df_cc.empty and not df_nv_all.empty:
-        df_merged = pd.merge(
-            df_cc, df_nv_all[["MaNV", "HoTen", "Nhom"]], on="MaNV", how="left"
-        )
+        # Kiểm tra an toàn các cột trước khi merge để tránh KeyError
+        available_cols = [
+            c for c in ["MaNV", "HoTen", "Nhom"] if c in df_nv_all.columns
+        ]
+        if "MaNV" in available_cols:
+            df_merged = pd.merge(
+                df_cc, df_nv_all[available_cols], on="MaNV", how="left"
+            )
+        else:
+            st.error(
+                "❌ Lỗi: File danh sách nhân sự thiếu cột 'MaNV' (Mã nhân viên). Vui lòng kiểm tra lại tên cột trong file Excel."
+            )
+            df_merged = df_cc.copy()
     else:
         df_merged = df_cc.copy()
-        if not "Nhom" in df_merged.columns:
-            df_merged["Nhom"] = "Khác"
 
-    if not df_lich.empty and "MaNV" in df_lich.columns and "Ngay" in df_lich.columns:
+    if not "Nhom" in df_merged.columns:
+        df_merged["Nhom"] = "Khác"
+
+    if (
+        not df_lich.empty
+        and "MaNV" in df_lich.columns
+        and "Ngay" in df_lich.columns
+    ):
         df_merged = pd.merge(
             df_merged,
             df_lich[["MaNV", "Ngay", "Ca"]],
