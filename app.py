@@ -9,9 +9,9 @@ import io
 # CẤU HÌNH CONFIG & TOÀN CỤC
 # ==========================================
 if "GEMINI_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+   genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 else:
-    genai.configure(api_key="YOUR_GEMINI_API_KEY_HERE")  # Thay API Key của bạn nếu chạy Local
+   genai.configure(api_key="YOUR_GEMINI_API_KEY_HERE")  # Thay API Key của bạn nếu chạy Local
 
 st.set_page_config(page_title="AI Attendance Dashboard", layout="wide")
 st.title("🤖 DASHBOARD QUẢN LÝ GIỜ CÔNG THÔNG MINH (PYTHON + GEMINI AI)")
@@ -78,9 +78,9 @@ if file_vantay and file_vp and file_cn:
     if df_lichca is not None:
         df_lichca = clean_and_normalize_chunks(df_lichca, {'Mã NV': kw_ma_nv, 'Ngày': kw_ngay, 'Ca': kw_ca})
         if 'Mã NV' in df_lichca.columns:
-            df_lichca['Mã NV'] = df_lichca['Mã NV'].astype(str).str.strip()
+           df_lichca['Mã NV'] = df_lichca['Mã NV'].astype(str).str.strip()
         if 'Ngày' in df_lichca.columns:
-            df_lichca['Ngày'] = pd.to_datetime(df_lichca['Ngày'], errors='coerce').dt.date
+           df_lichca['Ngày'] = pd.to_datetime(df_lichca['Ngày'], errors='coerce').dt.date
 
     # Ép kiểu dữ liệu đồng bộ
     if 'Mã NV' in df_vantay.columns: df_vantay['Mã NV'] = df_vantay['Mã NV'].astype(str).str.strip()
@@ -128,22 +128,22 @@ if file_vantay and file_vp and file_cn:
         elif ma in ds_ma_cn:
             loai_nv = "Công Nhân"
             if df_lichca is not None and 'Mã NV' in df_lichca.columns and 'Ngày' in df_lichca.columns:
-                lich_hom_nay = df_lichca[(df_lichca['Mã NV'] == ma) & (df_lichca['Ngày'] == ngay_chon)]
-                if not lich_hom_nay.empty and 'Ca' in df_lichca.columns:
-                    ca_lam_viec = str(lich_hom_nay.iloc[0]['Ca']).strip()
-                    if ca_lam_viec in GIO_CA_CN:
-                        gio_vao_chuan = GIO_CA_CN[ca_lam_viec]["vao"]
-                        gio_ra_chuan = GIO_CA_CN[ca_lam_viec]["ra"]
-                        
-                        # Ca đêm cho AI xử lý đối chiếu chéo ngày hôm sau
-                        if GIO_CA_CN[ca_lam_viec].get("qua_dem"):
-                            gio_vao_chuan, gio_ra_chuan = "AI_NEEDED", "AI_NEEDED"
-                    else:
-                        gio_vao_chuan, gio_ra_chuan = "AI_NEEDED", "AI_NEEDED" 
-                else:
-                    loai_nv = "Công Nhân (Nghỉ/Không lịch ca)"
+               lich_hom_nay = df_lichca[(df_lichca['Mã NV'] == ma) & (df_lichca['Ngày'] == ngay_chon)]
+               if not lich_hom_nay.empty and 'Ca' in df_lichca.columns:
+                   ca_lam_viec = str(lich_hom_nay.iloc[0]['Ca']).strip()
+                   if ca_lam_viec in GIO_CA_CN:
+                       gio_vao_chuan = GIO_CA_CN[ca_lam_viec]["vao"]
+                       gio_ra_chuan = GIO_CA_CN[ca_lam_viec]["ra"]
+                       
+                       # Ca đêm cho AI xử lý đối chiếu chéo ngày hôm sau
+                       if GIO_CA_CN[ca_lam_viec].get("qua_dem"):
+                           gio_vao_chuan, gio_ra_chuan = "AI_NEEDED", "AI_NEEDED"
+                   else:
+                       gio_vao_chuan, gio_ra_chuan = "AI_NEEDED", "AI_NEEDED" 
+               else:
+                   loai_nv = "Công Nhân (Nghỉ/Không lịch ca)"
             else:
-                gio_vao_chuan, gio_ra_chuan = "AI_NEEDED", "AI_NEEDED"
+               gio_vao_chuan, gio_ra_chuan = "AI_NEEDED", "AI_NEEDED"
 
         # Đẩy sang AI nếu thuộc diện ca phức tạp hoặc thiếu lịch ca rõ ràng
         if gio_vao_chuan == "AI_NEEDED" or gio_vao_chuan is None:
@@ -174,7 +174,7 @@ if file_vantay and file_vp and file_cn:
                 g_ra = datetime.strptime(str(v_ra).strip(), "%H:%M:%S").time() if pd.notna(v_ra) else None
                 
                 if not g_vao or not g_ra:
-                    raise ValueError("Thiếu dữ liệu check-in/out")
+                   raise ValueError("Thiếu dữ liệu check-in/out")
                 
                 # Logic phân tích Đi trễ / Về sớm
                 ly_do = []
@@ -184,10 +184,10 @@ if file_vantay and file_vp and file_cn:
                 trang_thai = " + ".join(ly_do) if ly_do else "Đúng giờ"
                 
                 ket_qua_python.append({
-                    "Mã NV": ma, "Bộ phận": loai_nv, "Ca": ca_lam_viec,
-                    "Giờ Vào Chuẩn": gio_vao_chuan.strftime("%H:%M:%S"), "Giờ Ra Chuẩn": gio_ra_chuan.strftime("%H:%M:%S"),
-                    "Giờ Vào Thực Tế": g_vao.strftime("%H:%M:%S"), "Giờ Ra Thực Tế": g_ra.strftime("%H:%M:%S"),
-                    "Trạng Thái": trang_thai, "Xử lý bởi": "Python"
+                   "Mã NV": ma, "Bộ phận": loai_nv, "Ca": ca_lam_viec,
+                   "Giờ Vào Chuẩn": gio_vao_chuan.strftime("%H:%M:%S"), "Giờ Ra Chuẩn": gio_ra_chuan.strftime("%H:%M:%S"),
+                   "Giờ Vào Thực Tế": g_vao.strftime("%H:%M:%S"), "Giờ Ra Thực Tế": g_ra.strftime("%H:%M:%S"),
+                   "Trạng Thái": trang_thai, "Xử lý bởi": "Python"
                 })
             except Exception:
                 # Gặp lỗi định dạng bất kỳ, gom lại chuyển Gemini AI xử lý
@@ -195,7 +195,7 @@ if file_vantay and file_vp and file_cn:
                     "Mã NV": ma, "Bộ phận": loai_nv, "Ca": ca_lam_viec,
                     "Giờ Vào Chuẩn": gio_vao_chuan.strftime("%H:%M:%S") if isinstance(gio_vao_chuan, time) else str(gio_vao_chuan),
                     "Giờ Ra Chuẩn": gio_ra_chuan.strftime("%H:%M:%S") if isinstance(gio_ra_chuan, time) else str(gio_ra_chuan),
-                    "Dữ liệu thô lỗi": dong_van_tay.to_dict('records')
+                   "Dữ liệu thô lỗi": dong_van_tay.to_dict('records')
                 })
 
     df_sach_python = pd.DataFrame(ket_qua_python)
@@ -232,9 +232,9 @@ if file_vantay and file_vp and file_cn:
                 
                 df_ai = pd.DataFrame(ket_qua_ai)
                 if not df_ai.empty and not df_sach_python.empty:
-                    df_cuoi_cung = pd.concat([df_sach_python, df_ai], ignore_index=True)
+                   df_cuoi_cung = pd.concat([df_sach_python, df_ai], ignore_index=True)
                 elif not df_ai.empty:
-                    df_cuoi_cung = df_ai
+                   df_cuoi_cung = df_ai
             except Exception as e:
                 st.error(f"⚠️ Gemini AI lỗi cấu trúc trả về hoặc sai định dạng JSON: {e}")
 
