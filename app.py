@@ -2,16 +2,22 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, time
 import google.generativeai as genai
-
-# Cấu hình Gemini AI
-# Thay bằng API Key của bạn nếu muốn dùng tính năng AI phân tích báo cáo sâu
-genai.configure(api_key="YOUR_GEMINI_API_KEY")
-
-st.set_page_config(page_title="Dashboard Quản Lý Giờ Công", layout="wide")
-st.title("📊 HỆ THỐNG QUẢN LÝ GIỜ CÔNG TỰ ĐỘNG (PYTHON & GEMINI AI)")
+import json
+import io
 
 # ==========================================
-# 1. THANH BÊN (SIDEBAR) - NÚT TẢI FILE EXCEL
+# CẤU HÌNH CONFIG & TOÀN CỤC
+# ==========================================
+if "GEMINI_API_KEY" in st.secrets:
+   genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+else:
+   genai.configure(api_key="YOUR_GEMINI_API_KEY_HERE") # Thay API Key của bạn nếu chạy Local
+
+st.set_page_config(page_title="AI Attendance Dashboard", layout="wide")
+st.title("🤖 DASHBOARD QUẢN LÝ GIỜ CÔNG THÔNG MINH (PYTHON + GEMINI AI)")
+
+# ==========================================
+# 1. THANH BÊN (SIDEBAR) - TẢI FILE EXCEL
 # ==========================================
 st.sidebar.header("📁 Tải Lên Dữ Liệu Excel")
 file_vantay = st.sidebar.file_uploader("1. File Bấm Vân Tay", type=["xlsx", "xls"])
@@ -19,193 +25,246 @@ file_lichca = st.sidebar.file_uploader("2. File Lịch Xếp Ca (Công nhân)", 
 file_vp = st.sidebar.file_uploader("3. Danh Sách Nhân Viên VP", type=["xlsx", "xls"])
 file_cn = st.sidebar.file_uploader("4. Danh Sách Công Nhân", type=["xlsx", "xls"])
 
-# Định nghĩa giờ chuẩn cho nhóm đặc biệt
+# Cấu hình khung giờ cố định cho nhóm Đặc biệt & Văn phòng
 NHOM_DAC_BIET = {
-    "575": {"vao": time(7, 0), "ra": time(15, 0), "qua_dem": False},
-    "749": {"vao": time(7, 0), "ra": time(19, 0), "qua_dem": False},
-    "949": {"vao": time(7, 0), "ra": time(19, 0), "qua_dem": False},
-    "673": {"vao": time(7, 0), "ra": time(15, 0), "qua_dem": False},
-    "A068": {"vao": time(10, 0), "ra": time(18, 0), "qua_dem": False},
+    "575": {"vao": time(7, 0), "ra": time(15, 0)},
+    "749": {"vao": time(7, 0), "ra": time(19, 0)},
+    "949": {"vao": time(7, 0), "ra": time(19, 0)},
+    "673": {"vao": time(7, 0), "ra": time(15, 0)},
+    "A068": {"vao": time(10, 0), "ra": time(18, 0)},
 }
+GIO_VP = {"vao": time(8, 0), "ra": time(17, 0)}
 
-# Giờ chuẩn mặc định cho Văn Phòng
-GIO_VP = {"vao": time(8, 0), "ra": time(17, 0)} 
-
-# Giờ chuẩn theo Ca của Công Nhân
+# Khung giờ làm việc theo ca của Công nhân
 GIO_CA_CN = {
-    "Đ": {"vao": time(19, 0), "ra": time(7, 0), "qua_dem": True}, # Ca đêm
-    "H": {"vao": time(7, 0), "ra": time(16, 0), "qua_dem": False}, # Ca hành chính ví dụ
+    "Đ": {"vao": time(19, 0), "ra": time(7, 0), "qua_dem": True},
+    "H": {"vao": time(7, 0), "ra": time(16, 0), "qua_dem": False},
 }
 
 # ==========================================
-# 2. XỬ LÝ DỮ LIỆU CHÍNH
+# 2. XỬ LÝ DỮ LIỆU LOGIC KHI ĐỦ FILE
 # ==========================================
 if file_vantay and file_vp and file_cn:
-    # Đọc dữ liệu từ excel
+    # Đọc dữ liệu thô ban đầu
     df_vantay = pd.read_excel(file_vantay)
     df_vp = pd.read_excel(file_vp)
     df_cn = pd.read_excel(file_cn)
     df_lichca = pd.read_excel(file_lichca) if file_lichca else None
     
-    # Ép kiểu dữ liệu Mã NV về chuỗi để đồng bộ
-    df_vantay['Mã NV'] = df_vantay['Mã NV'].astype(str).str.strip()
-    df_vp['Mã NV'] = df_vp['Mã NV'].astype(str).str.strip()
-    df_cn['Mã NV'] = df_cn['Mã NV'].astype(str).str.strip()
-    
-    if df_lichca is not None:
-        df_lichca['Mã NV'] = df_lichca['Mã NV'].astype(str).str.strip()
-        df_lichca['Ngày'] = pd.to_datetime(df_lichca['Ngày']).dt.date
+    # 🌟 CHUẨN HÓA TÊN CỘT THÔNG MINH (Tránh hoàn toàn lỗi KeyError)
+    for df in [df_vantay, df_vp, df_cn] + ([df_lichca] if df_lichca is not None else []):
+        df.columns = df.columns.astype(str).str.strip()
+        
+        # Tìm cột tương đương Mã Nhân Viên
+        ma_nv_col = [c for c in df.columns if c.lower() in ['mã nv', 'manv', 'ma nv', 'mã nhân viên', 'ma nhan vien', 'id', 'mã số']]
+        if ma_nv_col:
+           df.rename(columns={ma_nv_col[0]: 'Mã NV'}, inplace=True)
+           df['Mã NV'] = df['Mã NV'].astype(str).str.strip()
+            
+    # Đồng bộ hóa cột Ngày, Giờ trong file Vân tay
+    df_vantay.columns = df_vantay.columns.astype(str).str.strip()
+    ngay_col = [c for c in df_vantay.columns if c.lower() in ['ngày', 'ngay', 'date']]
+    if ngay_col: 
+        df_vantay.rename(columns={ngay_col[0]: 'Ngày'}, inplace=True)
+        
+    gio_vao_col = [c for c in df_vantay.columns if c.lower() in ['giờ vào', 'gio vao', 'vào', 'time in', 'giờ checkin', 'checkin']]
+    if gio_vao_col: 
+        df_vantay.rename(columns={gio_vao_col[0]: 'Giờ Vào'}, inplace=True)
+        
+    gio_ra_col = [c for c in df_vantay.columns if c.lower() in ['giờ ra', 'gio ra', 'ra', 'time out', 'giờ checkout', 'checkout']]
+    if gio_ra_col: 
+        df_vantay.rename(columns={gio_ra_col[0]: 'Giờ Ra'}, inplace=True)
 
-    # Chuẩn hóa cột ngày trong file vân tay
+    # Đồng bộ hóa dữ liệu file Lịch ca công nhân
+    if df_lichca is not None:
+        ngay_ca_col = [c for c in df_lichca.columns if c.lower() in ['ngày', 'ngay', 'date']]
+        if ngay_ca_col: 
+            df_lichca.rename(columns={ngay_ca_col[0]: 'Ngày'}, inplace=True)
+        df_lichca['Ngày'] = pd.to_datetime(df_lichca['Ngày']).dt.date
+        
+        ca_col = [c for c in df_lichca.columns if c.lower() in ['ca', 'ca làm việc', 'shift']]
+        if ca_col: 
+            df_lichca.rename(columns={ca_col[0]: 'Ca'}, inplace=True)
+
+    # Chuyển đổi định dạng Ngày của Vân Tay
     df_vantay['Ngày'] = pd.to_datetime(df_vantay['Ngày']).dt.date
     
-    # Lấy danh sách các ngày có trong file để hiển thị lên bộ chọn
+    # 🎯 BỘ CHỌN THỜI GIAN TRÊN DASHBOARD
     cac_ngay_co_san = sorted(df_vantay['Ngày'].unique())
-    
-    # 🎯 BỘ CHỌN NGÀY THÁNG NĂM TRÊN DASHBOARD
     st.subheader("🎯 Chọn Thời Gian Kiểm Tra")
-    ngay_chon = st.selectbox("Chọn ngày cần kết xuất báo cáo:", cac_ngay_co_san)
+    ngay_chon = st.selectbox("Chọn ngày cần kết xuất báo cáo từ file vân tay:", cac_ngay_co_san)
     
-    # Lọc dữ liệu vân tay theo ngày đã chọn
+    # Lọc dữ liệu vân tay đúng theo ngày được chỉ định
     df_vantay_ngay = df_vantay[df_vantay['Ngày'] == ngay_chon]
     
-    # Lấy danh sách tất cả nhân viên cần kiểm tra trong ngày
+    # Gom danh sách phân loại nhân sự tổng thể
     ds_ma_vp = df_vp['Mã NV'].tolist()
     ds_ma_cn = df_cn['Mã NV'].tolist()
     ds_dac_biet = list(NHOM_DAC_BIET.keys())
-    
-    ket_qua = []
-    
-    # --- LOGIC TOÀN BỘ NHÂN SỰ ---
-    # Tổng hợp tất cả mã nhân viên từ các danh sách
     tat_ca_ma = set(ds_ma_vp + ds_ma_cn + ds_dac_biet)
     
+    ket_qua_python = []
+    dong_cho_ai_xu_ly = [] # Hàng đợi lưu các dòng bị lỗi hoặc ca đêm phức tạp chuyển giao sang AI
+
+    # --- BƯỚC 1: LỚP PYTHON XỬ LÝ LÕI CỨNG ---
     for ma in tat_ca_ma:
         loai_nv = "Chưa phân loại"
         gio_vao_chuan, gio_ra_chuan = None, None
-        qua_dem = False
+        ca_lam_viec = "Hành chính"
         
-        # 1. Xác định nhóm và khung giờ chuẩn
+        # Phân loại nhóm và gán khung giờ đích
         if ma in ds_dac_biet:
             loai_nv = "Nhóm Đặc Biệt"
             gio_vao_chuan = NHOM_DAC_BIET[ma]["vao"]
             gio_ra_chuan = NHOM_DAC_BIET[ma]["ra"]
-            qua_dem = NHOM_DAC_BIET[ma]["qua_dem"]
-            
         elif ma in ds_ma_vp:
             loai_nv = "Văn Phòng"
             gio_vao_chuan = GIO_VP["vao"]
             gio_ra_chuan = GIO_VP["ra"]
-            
         elif ma in ds_ma_cn:
             loai_nv = "Công Nhân"
             if df_lichca is not None:
-                # Tra lịch ca của công nhân ngày hôm đó
-                lich_hom_nay = df_lichca[(df_lichca['Mã NV'] == ma) & (df_lichca['Ngày'] == ngay_chon)]
-                if not lich_hom_nay.empty:
-                    ca = lich_hom_nay.iloc[0]['Ca']
-                    if ca in GIO_CA_CN:
-                        gio_vao_chuan = GIO_CA_CN[ca]["vao"]
-                        gio_ra_chuan = GIO_CA_CN[ca]["ra"]
-                        qua_dem = GIO_CA_CN[ca]["qua_dem"]
-                    else:
-                        loai_nv = "Công Nhân (Nghỉ/Không xếp ca)"
-                else:
-                    loai_nv = "Công Nhân (Không có lịch ca)"
-        
-        # Nếu không xác định được giờ chuẩn (ví dụ công nhân không đi ca ngày đó)
-        if not gio_vao_chuan:
-            continue
-            
-        # 2. Dò dữ liệu bấm vân tay
+               lich_hom_nay = df_lichca[(df_lichca['Mã NV'] == ma) & (df_lichca['Ngày'] == ngay_chon)]
+               if not lich_hom_nay.empty:
+                   ca_lam_viec = str(lich_hom_nay.iloc[0]['Ca']).strip()
+                   if ca_lam_viec in GIO_CA_CN:
+                       gio_vao_chuan = GIO_CA_CN[ca_lam_viec]["vao"]
+                       gio_ra_chuan = GIO_CA_CN[ca_lam_viec]["ra"]
+                       
+                       # Nếu là ca đêm có tính chất gãy ngày, đưa thẳng vào hàng đợi để AI kiểm tra chéo vân tay
+                       if GIO_CA_CN[ca_lam_viec].get("qua_dem"):
+                           gio_vao_chuan, gio_ra_chuan = "AI_NEEDED", "AI_NEEDED"
+                   else:
+                       gio_vao_chuan, gio_ra_chuan = "AI_NEEDED", "AI_NEEDED" # Gặp ký hiệu ca lạ
+               else:
+                   loai_nv = "Công Nhân (Nghỉ/Không lịch ca)"
+            else:
+               gio_vao_chuan, gio_ra_chuan = "AI_NEEDED", "AI_NEEDED"
+
+        # Đẩy thẳng sang hàng đợi AI nếu thuộc ca phức tạp hoặc Python không tra cứu được giờ chuẩn
+        if gio_vao_chuan == "AI_NEEDED" or gio_vao_chuan is None:
+           dong_van_tay_loi = df_vantay_ngay[df_vantay_ngay['Mã NV'] == ma]
+           dong_cho_ai_xu_ly.append({
+               "Mã NV": ma, "Bộ phận": loai_nv, "Ca": ca_lam_viec,
+               "Dữ liệu vân tay ngày này": dong_van_tay_loi.to_dict('records')
+           })
+           continue
+
+        # Tìm kiếm dòng tương ứng trong file Vân Tay
         dong_van_tay = df_vantay_ngay[df_vantay_ngay['Mã NV'] == ma]
         
-        if file_vantay and file_vp and file_cn:
-    # Đọc dữ liệu từ excel
-    df_vantay = pd.read_excel(file_vantay)
-    df_vp = pd.read_excel(file_vp)
-    df_cn = pd.read_excel(file_cn)
-    df_lichca = pd.read_excel(file_lichca) if file_lichca else None
-    
-    # 🌟 ĐOẠN SỬA ĐỔI: TỰ ĐỘNG CHUẨN HÓA TÊN CỘT (Xóa khoảng trắng, viết thường để dò)
-    for df in [df_vantay, df_vp, df_cn] + ([df_lichca] if df_lichca is not None else []):
-        # Đổi tên cột về dạng viết thường và xóa khoảng trắng hai đầu để dễ dò
-        df.columns = df.columns.astype(str).str.strip()
-        
-        # Tự động tìm và đổi tên cột Mã Nhân Viên về chuẩn 'Mã NV'
-        ma_nv_col = [c for c in df.columns if c.lower() in ['mã nv', 'manv', 'ma nv', 'mã nhân viên', 'ma nhan vien', 'id', 'mã số']]
-        if ma_nv_col:
-            df.rename(columns={ma_nv_col[0]: 'Mã NV'}, inplace=True)
-            df['Mã NV'] = df['Mã NV'].astype(str).str.strip() # Ép kiểu chuỗi
-            
-    # Tự động chuẩn hóa cột Ngày, Giờ cho file vân tay
-    df_vantay.columns = df_vantay.columns.astype(str).str.strip()
-    ngay_col = [c for c in df_vantay.columns if c.lower() in ['ngày', 'ngay', 'date']]
-    if ngay_col: df.rename(columns={ngay_col[0]: 'Ngày'}, inplace=True)
-        
-    gio_vao_col = [c for c in df_vantay.columns if c.lower() in ['giờ vào', 'gio vao', 'vào', 'time in', 'giờ checkin']]
-    if gio_vao_col: df_vantay.rename(columns={gio_vao_col[0]: 'Giờ Vào'}, inplace=True)
-        
-    gio_ra_col = [c for c in df_vantay.columns if c.lower() in ['giờ ra', 'gio ra', 'ra', 'time out', 'giờ checkout']]
-    if gio_ra_col: df_vantay.rename(columns={gio_ra_col[0]: 'Giờ Ra'}, inplace=True)
+        if dong_van_tay.empty:
+            ket_qua_python.append({
+                "Mã NV": ma, "Bộ phận": loai_nv, "Ca": ca_lam_viec,
+                "Giờ Vào Chuẩn": gio_vao_chuan.strftime("%H:%M:%S"), "Giờ Ra Chuẩn": gio_ra_chuan.strftime("%H:%M:%S"),
+                "Giờ Vào Thực Tế": "N/A", "Giờ Ra Thực Tế": "N/A",
+                "Trạng Thái": "Vắng mặt (Không bấm thẻ)", "Xử lý bởi": "Python"
+            })
+        else:
+            try:
+                v_vao = dong_van_tay.iloc[0]['Giờ Vào']
+                v_ra = dong_van_tay.iloc[0]['Giờ Ra']
+                
+                # Ép kiểu dữ liệu thời gian thô từ file Excel
+                g_vao = datetime.strptime(str(v_vao).strip(), "%H:%M:%S").time() if pd.notna(v_vao) else None
+                g_ra = datetime.strptime(str(v_ra).strip(), "%H:%M:%S").time() if pd.notna(v_ra) else None
+                
+                if not g_vao or not g_ra:
+                   raise ValueError("Thiếu dữ liệu check-in/out")
+                
+                # Logic phân tích Đi trễ / Về sớm
+                ly_do = []
+                if g_vao > gio_vao_chuan: ly_do.append("Đi trễ")
+                if g_ra < gio_ra_chuan: ly_do.append("Về sớm")
+                
+                trang_thai = " + ".join(ly_do) if ly_do else "Đúng giờ"
+                
+                ket_qua_python.append({
+                   "Mã NV": ma, "Bộ phận": loai_nv, "Ca": ca_lam_viec,
+                   "Giờ Vào Chuẩn": gio_vao_chuan.strftime("%H:%M:%S"), "Giờ Ra Chuẩn": gio_ra_chuan.strftime("%H:%M:%S"),
+                   "Giờ Vào Thực Tế": g_vao.strftime("%H:%M:%S"), "Giờ Ra Thực Tế": g_ra.strftime("%H:%M:%S"),
+                   "Trạng Thái": trang_thai, "Xử lý bởi": "Python"
+                })
+            except Exception:
+                # Gặp bất cứ lỗi định dạng nào trong ô, chuyển tiếp sang cho Gemini giải cứu
+                dong_cho_ai_xu_ly.append({
+                    "Mã NV": ma, "Bộ phận": loai_nv, "Ca": ca_lam_viec,
+                    "Giờ Vào Chuẩn": gio_vao_chuan.strftime("%H:%M:%S") if isinstance(gio_vao_chuan, time) else str(gio_vao_chuan),
+                    "Giờ Ra Chuẩn": gio_ra_chuan.strftime("%H:%M:%S") if isinstance(gio_ra_chuan, time) else str(gio_ra_chuan),
+                    "Dữ liệu thô lỗi": dong_van_tay.to_dict('records')
+                })
 
-    # Chuẩn hóa ngày cho file lịch ca
-    if df_lichca is not None:
-        ngay_ca_col = [c for c in df_lichca.columns if c.lower() in ['ngày', 'ngay', 'date']]
-        if ngay_ca_col: df_lichca.rename(columns={ngay_ca_col[0]: 'Ngày'}, inplace=True)
-        df_lichca['Ngày'] = pd.to_datetime(df_lichca['Ngày']).dt.date
-        
-        ca_col = [c for c in df_lichca.columns if c.lower() in ['ca', 'ca làm việc', 'shift']]
-        if ca_col: df_lichca.rename(columns={ca_col[0]: 'Ca'}, inplace=True)
+    df_sach_python = pd.DataFrame(ket_qua_python)
 
-    # Tiếp tục xử lý ngày của file vân tay
-    df_vantay['Ngày'] = pd.to_datetime(df_vantay['Ngày']).dt.date
-        # Thêm vào bảng kết quả
-        ket_qua.append({
-            "Mã NV": ma,
-            "Bộ phận": loai_nv,
-            "Giờ Vào Chuẩn": gio_vao_chuan,
-            "Giờ Ra Chuẩn": gio_ra_chuan,
-            "Giờ Vào Thực Tế": g_vao,
-            "Giờ Ra Thực Tế": g_ra,
-            "Trạng Thái": trang_thai
-        })
+    # --- BƯỚC 2: PHÂN CẤP SỬ LÝ CỨU HỘ BỞI GEMINI AI ---
+    df_cuoi_cung = df_sach_python
+    if dong_cho_ai_xu_ly:
+        st.warning(f"⚡ Phát hiện {len(dong_cho_ai_xu_ly)} trường hợp dữ liệu ca gãy hoặc ca đêm phức tạp. Đang chuyển giao dữ liệu qua Gemini AI phân tích...")
         
-    # Hiện thị kết quả lên Dashboard dưới dạng bảng
-    df_ket_qua = pd.DataFrame(ket_qua)
-    
-    st.subheader(f"📋 Kết quả kiểm tra ngày {ngay_chon.strftime('%d/%m/%Y')}")
-    st.dataframe(df_ket_qua, use_container_width=True)
-    
-    # Bộ lọc nhanh trạng thái vi phạm
-    st.subheader("⚠️ Danh sách nhân viên đi trễ / về sớm / vắng")
-    df_vi_pham = df_ket_qua[df_ket_qua['Trạng Thái'] != "Đúng giờ"]
-    st.dataframe(df_vi_pham, use_container_width=True)
-
-    # ==========================================
-    # 3. KẾT HỢP GEMINI AI ĐỂ PHÂN TÍCH BÁO CÁO
-    # ==========================================
-    st.subheader("🤖 Gemini AI Phân Tích & Đánh Giá Giao Ca")
-    if st.button("Yêu cầu Gemini AI phân tích dữ liệu ngày này"):
-        with st.spinner("Gemini đang đọc bảng dữ liệu dữ liệu..."):
-            # Chuyển data vi phạm thành text gửi cho AI
-            du_lieu_text = df_vi_pham.to_string()
-            
+        with st.spinner("Gemini AI đang suy luận thông minh từ dữ liệu thô..."):
             prompt = f"""
-            Bạn là một chuyên gia nhân sự chuyên nghiệp. Hãy đọc dữ liệu thống kê sai lệch giờ công (đi trễ, về sớm, vắng) của ngày {ngay_chon} dưới đây:
-            {du_lieu_text}
-            
-            Nhiệm vụ:
-            1. Tóm tắt nhanh số lượng đi trễ, về sớm và vắng theo từng bộ phận (Công nhân, Văn phòng, Nhóm đặc biệt).
-            2. Chỉ ra những mã nhân viên vi phạm nghiêm trọng nhất (vừa trễ vừa về sớm, hoặc vắng không lý do).
-            3. Đưa ra 3 đề xuất ngắn gọn bằng tiếng Việt để quản lý nhắc nhở hoặc cải thiện tình hình kỷ luật lao động dựa trên dữ liệu trên.
-            """
-            
+Bạn là một chuyên gia AI quản lý chấm công. Dưới đây là danh sách nhân sự có lỗi dữ liệu hoặc có ca đêm phức tạp nhảy ngày mà mã Python không tự giải quyết được:
+{json.dumps(dong_cho_ai_xu_ly, default=str, ensure_ascii=False)}
+
+Nhiệm vụ của bạn:
+1. Đọc và phân tích thông tin của từng nhân viên.
+2. Trích xuất giờ vào thực tế và giờ ra thực tế từ "Dữ liệu vân tay ngày này" hoặc "Dữ liệu thô lỗi".
+3. Nếu là ca Đêm ("Ca": "Đ"), giờ vào chuẩn là 19:00:00 và giờ ra chuẩn là 07:00:00 sáng hôm sau. Đối chiếu xem nhân viên có bấm thẻ khớp hay không.
+4. Trả về kết quả dưới dạng một MẢNG JSON DUY NHẤT. Mỗi phần tử trong mảng có cấu trúc chuẩn như sau:
+- "Mã NV": (giữ nguyên)
+- "Bộ phận": (giữ nguyên)
+- "Ca": (giữ nguyên)
+- "Giờ Vào Chuẩn": (định dạng HH:MM:SS)
+- "Giờ Ra Chuẩn": (định dạng HH:MM:SS)
+- "Giờ Vào Thực Tế": (định dạng HH:MM:SS hoặc "N/A" nếu không có)
+- "Giờ Ra Thực Tế": (định dạng HH:MM:SS hoặc "N/A" nếu không có)
+- "Trạng Thái": (Điền chính xác: "Đi trễ", "Về sớm", "Đi trễ + Về sớm", "Đúng giờ", hoặc "Vắng mặt (Không bấm thẻ)")
+- "Xử lý bởi": "Gemini AI"
+
+LƯU Ý: Không thêm bất kỳ dòng văn bản giải thích nào ngoài đoạn mã JSON để Python có thể đọc trực tiếp.
+"""
+
             try:
                 model = genai.GenerativeModel("gemini-1.5-flash")
                 response = model.generate_content(prompt)
-                st.markdown(response.text)
+                clean_text = response.text.replace("```json", "").replace("```", "").strip()
+
+                ket_qua_ai = json.loads(clean_text)
+                df_ai = pd.DataFrame(ket_qua_ai)
+                
+                # Trộn báo cáo đã qua xử lý của cả hai lớp Python và AI
+                df_cuoi_cung = pd.concat([df_sach_python, df_ai], ignore_index=True)
+
             except Exception as e:
-                st.error("Không thể kết nối Gemini AI. Vui lòng kiểm tra lại API Key trong code.")
+                st.error(f"⚠️ Gemini AI lỗi cấu trúc trả về. Sử dụng tạm kết quả từ Python. Chi tiết lỗi: {e}")
+
+    # ==========================================
+    # 3. HIỂN THỊ KẾT QUẢ & NÚT XUẤT FILE EXCEL
+    # ==========================================
+    st.subheader(f"📋 Bảng Thống Kê Giờ Công Tổng Hợp - Ngày {ngay_chon.strftime('%d/%m/%Y')}")
+    st.dataframe(df_cuoi_cung, use_container_width=True)
+
+    # Lọc riêng những người vi phạm
+    st.subheader("⚠️ Danh Sách Nhân Viên Vi Phạm (Đi Trễ / Về Sớm / Vắng Mặt)")
+    df_vi_pham = df_cuoi_cung[df_cuoi_cung['Trạng Thái'] != "Đúng giờ"]
+    st.dataframe(df_vi_pham, use_container_width=True)
+
+    # 📤 TÍNH NĂNG XUẤT FULL BÁO CÁO RA FILE EXCEL
+    st.subheader("📥 Xuất Báo Cáo")
+    
+    # Tạo luồng dữ liệu nhị phân lưu trữ file Excel tạm thời
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df_cuoi_cung.to_excel(writer, index=False, sheet_name="Tổng Hợp Giờ Công")
+        df_vi_pham.to_excel(writer, index=False, sheet_name="Danh Sách Vi Phạm")
+    buffer.seek(0)
+    
+    # Nút bấm tải dữ liệu xuống thiết bị máy tính
+    st.download_button(
+        label="📥 Tải xuống file Excel báo cáo tổng hợp",
+        data=buffer,
+        file_name=f"Bao_cao_gio_cong_{ngay_chon.strftime('%d_%m_%Y')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 else:
-    st.info("👋 Chào mừng bạn! Vui lòng tải đầy đủ các file Excel ở thanh bên trái (Sidebar) để Dashboard bắt đầu xử lý dữ liệu.")
+    st.info("👋 Vui lòng tải đầy đủ cả 4 file Excel cần thiết ở thanh bên trái (Sidebar) để kích hoạt hệ thống tự động đồng bộ.")
